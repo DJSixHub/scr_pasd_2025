@@ -1,22 +1,17 @@
-"""
-Configuration manager for the Distributed Supervised Learning Platform.
-"""
+###### Gestor de configuración para la Plataforma de Aprendizaje Supervisado Distribuido
 
-import os
 import yaml
 from pathlib import Path
 
 
 def load_config(config_path):
-    """
-    Load configuration from a YAML file.
-    
-    Args:
-        config_path (str): Path to the YAML configuration file.
-        
-    Returns:
-        dict: Configuration dictionary.
-    """
+    ###### Cargar configuración desde un archivo YAML
+    # 
+    # Args:
+    #    config_path (str): Ruta al archivo de configuración YAML
+    #
+    # Returns:
+    #    dict: Diccionario de configuración
     try:
         with open(config_path, 'r') as file:
             config = yaml.safe_load(file)
@@ -30,10 +25,8 @@ def load_config(config_path):
 
 
 def get_project_root():
-    """
-    Get the absolute path of the project root directory.
-    
-    Returns:
-        Path: Project root directory path.
-    """
+    ###### Obtener la ruta absoluta del directorio raíz del proyecto
+    #
+    # Returns:
+    #    Path: Ruta al directorio raíz del proyecto
     return Path(__file__).parent.parent.parent

@@ -1,8 +1,6 @@
-"""
-Example configuration file for the Distributed Supervised Learning Platform.
-"""
+###### Archivo de configuración para la Plataforma de Aprendizaje Supervisado Distribuido
 
-# Training Configuration
+# Configuración de Entrenamiento
 datasets:
   - name: iris
     target_column: species
@@ -14,7 +12,7 @@ datasets:
     test_size: 0.25
     random_state: 42
 
-# Model Configuration
+# Configuración de Modelos
 models:
   - type: random_forest
     params:
@@ -34,27 +32,26 @@ models:
     params:
       max_iter: 1000
       random_state: 42
-  
-  - type: svm
+    - type: svm
     params:
       kernel: rbf
       C: 1.0
       random_state: 42
       task: classification
 
-# Ray Configuration
+# Configuración de Ray
 ray:
   head_address: localhost:6379
   redis_password: null
-  num_cpus: null  # Use all available CPUs
+  num_cpus: null  # Usar todas las CPUs disponibles
   num_gpus: 0
 
-# Serving Configuration
+# Configuración de Servicio
 serving:
   port: 8000
   host: 0.0.0.0
 
-# Monitoring Configuration
+# Configuración de Monitoreo
 monitoring:
-  interval: 5  # in seconds
+  interval: 5  # en segundos
   save_plots: true

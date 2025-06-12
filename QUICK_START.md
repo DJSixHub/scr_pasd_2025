@@ -27,30 +27,30 @@ python generate_data.py
 
 ### Ejecución del Sistema
 
-#### Modo Demo Completo
+#### Modo Completo
 
-Para ejecutar todos los componentes del sistema en modo demo:
+Para ejecutar todos los componentes del sistema:
 
 ```bash
-python run_demo.py --demo-mode=all
+python run.py --modo=todo
 ```
 
 #### Ejecutar Solo el Entrenamiento
 
 ```bash
-python run_demo.py --demo-mode=train
+python run.py --modo=entrenamiento
 ```
 
 #### Ejecutar Solo el Servicio de Modelos
 
 ```bash
-python run_demo.py --demo-mode=serve
+python run.py --modo=servicio
 ```
 
 #### Ejecutar Solo el Monitoreo
 
 ```bash
-python run_demo.py --demo-mode=monitor
+python run.py --modo=monitoreo
 ```
 
 ### Ejecutar Manualmente los Componentes

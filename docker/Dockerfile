@@ -1,20 +1,20 @@
 FROM python:3.9-slim
 
-# Set working directory
+# Establecer directorio de trabajo
 WORKDIR /app
 
-# Copy requirements first for better caching
+# Copiar requirements primero para mejor caché
 COPY requirements.txt .
 
-# Install dependencies
+# Instalar dependencias
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the project files
+# Copiar archivos del proyecto
 COPY . .
 
-# Expose port for API
+# Exponer puerto para API
 EXPOSE 8000
 
-# Start command with default argument
+# Comando de inicio con argumento predeterminado
 ENTRYPOINT ["python", "src/main.py"]
 CMD ["--mode=serve", "--config=src/config/config.yaml"]

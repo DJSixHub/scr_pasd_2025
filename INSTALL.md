@@ -64,6 +64,14 @@ python src/main.py --mode=serve
 python src/main.py --mode=monitor
 ```
 
+### Modo simplificado de ejecución
+
+También puedes usar el script unificado para ejecutar todos los componentes:
+
+```bash
+python run.py --modo=todo
+```
+
 ## Estructura del proyecto
 
 - `src/`: Código fuente del proyecto

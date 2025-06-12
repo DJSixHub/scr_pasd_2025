@@ -1,6 +1,4 @@
-"""
-Model serving API using Ray Serve.
-"""
+###### API de servicio de modelos usando Ray Serve
 
 import os
 import ray
@@ -10,29 +8,24 @@ import pandas as pd
 import time
 import joblib
 from pathlib import Path
-from typing import Dict, List, Any, Tuple
-from flask import Flask, request, jsonify
-import json
+from typing import Dict, List
+from flask import Flask
 
 from src.utils.config import get_project_root
 
-# Flask application for serving predictions
+# Aplicación Flask para servir predicciones
 app = Flask(__name__)
 
 
 @serve.deployment(route_prefix="/api")
 class ModelDeployment:
-    """
-    Ray Serve deployment for serving machine learning models.
-    """
+    ###### Despliegue de Ray Serve para servir modelos de machine learning
     
     def __init__(self, config):
-        """
-        Initialize the model deployment.
-        
-        Args:
-            config (Dict): Configuration for model deployment.
-        """
+        ###### Inicializar el despliegue del modelo
+        #
+        # Args:
+        #    config (Dict): Configuración para el despliegue del modelo
         self.config = config
         self.models_dir = get_project_root() / 'models'
         self.loaded_models = {}

@@ -1,6 +1,4 @@
-"""
-This module provides functionality for monitoring the distributed system.
-"""
+###### Este módulo proporciona funcionalidad para monitorear el sistema distribuido
 
 import time
 import ray
@@ -9,7 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Any
+from typing import Dict, List
 from pathlib import Path
 
 from src.utils.config import get_project_root
@@ -17,9 +15,7 @@ from src.utils.config import get_project_root
 
 @ray.remote
 class MetricsCollector:
-    """
-    Ray actor for collecting system metrics.
-    """
+    ###### Actor de Ray para recolectar métricas del sistema
     
     def __init__(self):
         """

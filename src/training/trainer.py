@@ -1,6 +1,4 @@
-"""
-Distributed trainer implementation using Ray.
-"""
+###### Implementación de entrenamiento distribuido usando Ray
 
 import os
 import ray
@@ -8,7 +6,6 @@ import time
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Tuple
-from sklearn.base import BaseEstimator
 import joblib
 from pathlib import Path
 
@@ -19,17 +16,13 @@ from src.models.model_factory import get_model
 
 @ray.remote
 class TrainingWorker:
-    """
-    Ray actor for training models in parallel.
-    """
+    ###### Actor de Ray para entrenar modelos en paralelo
     
     def __init__(self, model_config):
-        """
-        Initialize the training worker.
-        
-        Args:
-            model_config (Dict): Configuration for model training.
-        """
+        ###### Inicializar el trabajador de entrenamiento
+        #
+        # Args:
+        #    model_config (Dict): Configuración para el entrenamiento del modelo
         self.model_config = model_config
         self.model_type = model_config.get('type', 'random_forest')
         self.model_params = model_config.get('params', {})

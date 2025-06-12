@@ -1,23 +1,18 @@
-"""
-Factory for creating machine learning models.
-"""
+###### Fábrica para crear modelos de aprendizaje automático
 
 from typing import Dict, Any
-import numpy as np
 from sklearn.base import BaseEstimator
 
 
 def get_model(model_type: str, **model_params) -> BaseEstimator:
-    """
-    Factory function to create a machine learning model.
-    
-    Args:
-        model_type (str): Type of model to create.
-        **model_params: Parameters for the model.
-        
-    Returns:
-        BaseEstimator: A scikit-learn compatible model.
-    """
+    ###### Función de fábrica para crear un modelo de aprendizaje automático
+    #
+    # Args:
+    #    model_type (str): Tipo de modelo a crear
+    #    **model_params: Parámetros para el modelo
+    #
+    # Returns:
+    #    BaseEstimator: Un modelo compatible con scikit-learn
     model_type = model_type.lower()
     
     if model_type == 'random_forest':

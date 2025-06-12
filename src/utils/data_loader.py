@@ -1,6 +1,4 @@
-"""
-Utility functions for data loading and preprocessing.
-"""
+###### Funciones de utilidad para cargar y preprocesar datos
 
 import os
 import pandas as pd
@@ -12,16 +10,14 @@ from src.utils.config import get_project_root
 
 
 def load_dataset(dataset_name: str, **kwargs) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Load a dataset from the data directory.
-    
-    Args:
-        dataset_name (str): Name of the dataset to load.
-        **kwargs: Additional arguments for loading the dataset.
-        
-    Returns:
-        Tuple[pd.DataFrame, pd.DataFrame]: Training and testing dataframes.
-    """
+    ###### Cargar un dataset desde el directorio de datos
+    #
+    # Args:
+    #    dataset_name (str): Nombre del dataset a cargar
+    #    **kwargs: Argumentos adicionales para la carga del dataset
+    #
+    # Returns:
+    #    Tuple[pd.DataFrame, pd.DataFrame]: Dataframes de entrenamiento y prueba
     data_dir = get_project_root() / 'data'
     raw_dir = data_dir / 'raw'
     processed_dir = data_dir / 'processed'

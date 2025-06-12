@@ -1,24 +1,23 @@
 version: '3'
 
 services:
-  # Head node service
+  # Servicio de nodo principal
   head:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     command: --mode=train --head
     ports:
-      - "6379:6379"  # Redis port for Ray
-      - "8265:8265"  # Ray dashboard
-      - "8000:8000"  # Model serving API
+      - "6379:6379"  # Puerto Redis para Ray
+      - "8265:8265"  # Dashboard de Ray
+      - "8000:8000"  # API de servicio de modelos
     volumes:
       - ../data:/app/data
       - ../models:/app/models
       - ../plots:/app/plots
     environment:
       - RAY_ADDRESS=
-
-  # Worker node service (can be scaled)
+  # Servicio de nodo trabajador (escalable)
   worker:
     build:
       context: ..
@@ -31,9 +30,9 @@ services:
     environment:
       - RAY_ADDRESS=head:6379
     deploy:
-      replicas: 2  # Number of worker nodes
+      replicas: 2  # Número de nodos trabajadores
 
-  # Serving API service
+  # Servicio API para servir modelos
   serving:
     build:
       context: ..
