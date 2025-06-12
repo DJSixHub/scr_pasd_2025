@@ -1,0 +1,60 @@
+"""
+Example configuration file for the Distributed Supervised Learning Platform.
+"""
+
+# Training Configuration
+datasets:
+  - name: iris
+    target_column: species
+    test_size: 0.2
+    random_state: 42
+  
+  - name: diabetes
+    target_column: target
+    test_size: 0.25
+    random_state: 42
+
+# Model Configuration
+models:
+  - type: random_forest
+    params:
+      n_estimators: 100
+      max_depth: 10
+      random_state: 42
+      task: classification
+  
+  - type: gradient_boosting
+    params:
+      n_estimators: 100
+      learning_rate: 0.1
+      random_state: 42
+      task: classification
+  
+  - type: logistic_regression
+    params:
+      max_iter: 1000
+      random_state: 42
+  
+  - type: svm
+    params:
+      kernel: rbf
+      C: 1.0
+      random_state: 42
+      task: classification
+
+# Ray Configuration
+ray:
+  head_address: localhost:6379
+  redis_password: null
+  num_cpus: null  # Use all available CPUs
+  num_gpus: 0
+
+# Serving Configuration
+serving:
+  port: 8000
+  host: 0.0.0.0
+
+# Monitoring Configuration
+monitoring:
+  interval: 5  # in seconds
+  save_plots: true
