@@ -28,10 +28,12 @@ pip install -r requirements.txt
 
 3. Configurar el entorno:
 
-Copiar el archivo de configuración de ejemplo:
+Para configurar el sistema:
 
 ```bash
-cp src/config/config.example.yaml src/config/config.yaml
+# El sistema creará automáticamente un archivo de configuración si no existe
+# O puedes crear manualmente tu archivo de configuración:
+nano src/config/config.yaml
 ```
 
 Ajustar los parámetros según sea necesario.

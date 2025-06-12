@@ -92,18 +92,74 @@ def ejecutar_monitoreo(config_path):
 def main():
     args = parse_args()
     
-    # Verificar si existe el archivo de configuración, si no copiar el ejemplo
+    # Verificar si existe el archivo de configuración, si no crear uno predeterminado
     config_path = args.config
     if not os.path.exists(config_path):
-        from shutil import copyfile
-        example_config = "src/config/config.example.yaml"
-        if os.path.exists(example_config):
-            print(f"Archivo de configuración {config_path} no encontrado. Copiando configuración de ejemplo...")
-            copyfile(example_config, config_path)
-            print(f"Copiada configuración de ejemplo a {config_path}")
-        else:
-            print(f"Error: No se encuentra ni el archivo de configuración {config_path} ni la configuración de ejemplo.")
-            return
+        print(f"Archivo de configuración {config_path} no encontrado. Creando configuración predeterminada...")
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        
+        # Crear un archivo de configuración básico
+        with open(config_path, 'w') as f:
+            f.write("""###### Archivo de configuración para la Plataforma de Aprendizaje Supervisado Distribuido
+
+# Configuración de Entrenamiento
+datasets:
+  - name: iris
+    target_column: species
+    test_size: 0.2
+    random_state: 42
+  
+  - name: diabetes
+    target_column: target
+    test_size: 0.25
+    random_state: 42
+
+# Configuración de Modelos
+models:
+  - type: random_forest
+    params:
+      n_estimators: 100
+      max_depth: 10
+      random_state: 42
+      task: classification
+  
+  - type: gradient_boosting
+    params:
+      n_estimators: 100
+      learning_rate: 0.1
+      random_state: 42
+      task: classification
+  
+  - type: logistic_regression
+    params:
+      max_iter: 1000
+      random_state: 42
+  
+  - type: svm
+    params:
+      kernel: rbf
+      C: 1.0
+      random_state: 42
+      task: classification
+
+# Configuración de Ray
+ray:
+  head_address: localhost:6379
+  redis_password: null
+  num_cpus: null  # Usar todas las CPUs disponibles
+  num_gpus: 0
+
+# Configuración de Servicio
+serving:
+  port: 8000
+  host: 0.0.0.0
+
+# Configuración de Monitoreo
+monitoring:
+  interval: 5  # en segundos
+  save_plots: true
+""")
+        print(f"Creada configuración predeterminada en {config_path}")
     
     # Generar datasets de ejemplo si no existen
     data_dir = Path("data/raw")

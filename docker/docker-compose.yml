@@ -6,7 +6,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: --mode=train --head
+    command: --mode=train --head --config=${CONFIG_FILE:-src/config/config.yaml}
     ports:
       - "6379:6379"  # Puerto Redis para Ray
       - "8265:8265"  # Dashboard de Ray
@@ -17,12 +17,13 @@ services:
       - ../plots:/app/plots
     environment:
       - RAY_ADDRESS=
+  
   # Servicio de nodo trabajador (escalable)
   worker:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: --mode=train --worker --head-address=head:6379
+    command: --mode=train --worker --head-address=head:6379 --config=${CONFIG_FILE:-src/config/config.yaml}
     depends_on:
       - head
     volumes:
@@ -30,14 +31,12 @@ services:
     environment:
       - RAY_ADDRESS=head:6379
     deploy:
-      replicas: 2  # Número de nodos trabajadores
-
-  # Servicio API para servir modelos
+      replicas: 2  # Número de nodos trabajadores  # Servicio API para servir modelos
   serving:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: --mode=serve
+    command: --mode=serve --config=${CONFIG_FILE:-src/config/config.yaml}
     ports:
       - "8000:8000"
     depends_on:
@@ -47,12 +46,12 @@ services:
     environment:
       - RAY_ADDRESS=head:6379
 
-  # Monitoring service
+  # Servicio de monitoreo
   monitor:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: --mode=monitor
+    command: --mode=monitor --config=${CONFIG_FILE:-src/config/config.yaml}
     depends_on:
       - head
     volumes:

@@ -6,8 +6,8 @@ WORKDIR /app
 # Copiar requirements primero para mejor caché
 COPY requirements.txt .
 
-# Instalar dependencias
-RUN pip install --no-cache-dir -r requirements.txt
+# Instalar todas las dependencias sin verificar hashes (usando --hash=skip)
+RUN pip install --no-cache-dir --hash=skip -r requirements.txt
 
 # Copiar archivos del proyecto
 COPY . .

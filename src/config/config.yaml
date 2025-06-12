@@ -32,7 +32,8 @@ models:
     params:
       max_iter: 1000
       random_state: 42
-    - type: svm
+  
+  - type: svm
     params:
       kernel: rbf
       C: 1.0

@@ -9,7 +9,7 @@ from sklearn import datasets
 from pathlib import Path
 
 # Set up paths
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).parent.parent.parent
 data_dir = project_root / 'data'
 raw_dir = data_dir / 'raw'
 

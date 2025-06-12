@@ -25,29 +25,64 @@ pip install -r requirements.txt
 python generate_data.py
 ```
 
+### Verificación del Sistema
+
+Antes de ejecutar el sistema, puedes verificar que todo esté correctamente configurado:
+
+```powershell
+# Para entorno local
+.\verificar_sistema.ps1 -entorno local
+
+# Para entorno Docker
+.\verificar_sistema.ps1 -entorno docker
+```
+
 ### Ejecución del Sistema
 
-#### Modo Completo
+El proyecto incluye scripts de PowerShell para facilitar la ejecución:
 
-Para ejecutar todos los componentes del sistema:
+#### Ejecución Local
 
-```bash
-python run.py --modo=todo
+```powershell
+# Modo Completo (todos los componentes)
+.\ejecutar_local.ps1 -modo todo
+
+# Solo entrenamiento (nodo principal o trabajador)
+.\ejecutar_local.ps1 -modo entrenamiento
+
+# Solo servicio de modelos
+.\ejecutar_local.ps1 -modo servicio
+
+# Solo monitoreo
+.\ejecutar_local.ps1 -modo monitoreo
+
+# Usando una configuración personalizada
+.\ejecutar_local.ps1 -modo todo -configPath "ruta/a/mi_config.yaml"
 ```
 
-#### Ejecutar Solo el Entrenamiento
+#### Ejecución con Docker
 
-```bash
-python run.py --modo=entrenamiento
+```powershell
+# Modo Completo (todos los servicios)
+.\ejecutar_docker.ps1 -componente todo
+
+# Solo nodo principal
+.\ejecutar_docker.ps1 -componente head
+
+# Solo nodos trabajadores
+.\ejecutar_docker.ps1 -componente worker
+
+# Solo servicio de modelos
+.\ejecutar_docker.ps1 -componente serving
+
+# Solo monitoreo
+.\ejecutar_docker.ps1 -componente monitor
+
+# Usando una configuración personalizada
+.\ejecutar_docker.ps1 -componente todo -configPath "ruta/a/mi_config.yaml"
 ```
 
-#### Ejecutar Solo el Servicio de Modelos
-
-```bash
-python run.py --modo=servicio
-```
-
-#### Ejecutar Solo el Monitoreo
+#### Ejecución Manual (Avanzada)
 
 ```bash
 python run.py --modo=monitoreo

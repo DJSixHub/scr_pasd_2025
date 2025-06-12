@@ -24,6 +24,19 @@ El proyecto consiste en desarrollar una plataforma capaz de entrenar y desplegar
 - ✅ Capacidad de entrenar **múltiples datasets secuencialmente** en una misma ejecución.  
 - ✅ Uso eficiente de **Ray** para gestión de tareas y recursos.  
 
+#### **Scripts de Ejecución y Prueba**
+La plataforma incluye varios scripts para facilitar su uso:
+
+1. **Ejecución**:
+   - `ejecutar_local.ps1`: Para ejecutar componentes en entorno local
+   - `ejecutar_docker.ps1`: Para ejecutar componentes en contenedores Docker
+
+2. **Verificación**:
+   - `verificar_sistema.ps1`: Para comprobar que todo está correctamente configurado
+   - `probar_endpoints.ps1`: Para probar la API de servicio de modelos
+
+Para instrucciones detalladas, consulta `QUICK_START.md`.
+
 #### **Funcionalidades Adicionales**  
 1. Entrenamiento y *serving* de **varios datasets simultáneamente**.  
 2. **Estadísticas avanzadas**: Comparativa de modelos, análisis de tendencias, etc.  
