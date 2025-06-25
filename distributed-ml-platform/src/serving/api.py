@@ -1,13 +1,10 @@
 """
 Model serving functionality for distributed ML platform using Ray Serve
 """
-import os
 import ray
 from ray import serve
 import logging
 import time
-import json
-import numpy as np
 import pandas as pd
 from typing import Dict, List, Any
 from pydantic import BaseModel
@@ -159,7 +156,7 @@ class ModelServer:
         Start the model server
         
         Args:
-            blocking (bool): Whether to run in blocking mode (not used in Ray Serve)
+            blocking (bool): Whether to run in blocking mode
         """
         try:
             # Start Ray Serve
@@ -206,6 +203,7 @@ class ModelServer:
         """Add a model to the server"""
         if self.predictor_handle:
             ray.get(self.predictor_handle.add_model.remote(model_name, model))
+            logger.info(f"Added model {model_name} to the server")
         else:
             logger.error("Cannot add model: server not running")
             

@@ -1,7 +1,7 @@
 version: '3'
 
 services:
-  # Ray head node (also serves the API)
+  # Ray head node (handles both training and serving)
   ray-head:
     build: .
     ports:
@@ -10,15 +10,24 @@ services:
       - "10001:10001"  # Ray client server
       - "6379:6379"  # Redis
     command: >
-      bash -c "ray start --head --port=6379 --dashboard-host=0.0.0.0 --block &&
-              python main.py --address=localhost:6379 --mode=serve --host=0.0.0.0 --port=8000"
+      bash -c "ray start --head --port=6379 --dashboard-host=0.0.0.0 --dashboard-port=8265 --block &
+              sleep 5 &&
+              python main.py --mode=all --data=data/iris.csv data/wine.csv data/breast_cancer.csv data/digits.csv --target=target --output-dir=/app/output --host=0.0.0.0 --port=8000"
     volumes:
       - ./output:/app/output
+      - ./data:/app/data
+    environment:
+      - RAY_DISABLE_DOCKER_CPU_WARNING=1
     healthcheck:
       test: ["CMD", "ray", "status"]
       interval: 10s
       timeout: 10s
-      retries: 3
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
 
   # Ray worker nodes
   ray-worker-1:
@@ -26,15 +35,29 @@ services:
     depends_on:
       - ray-head
     command: >
-      bash -c "sleep 5 && ray start --address=ray-head:6379 --block"
+      bash -c "sleep 10 && ray start --address=ray-head:6379 --block"
+    environment:
+      - RAY_DISABLE_DOCKER_CPU_WARNING=1
     deploy:
-      replicas: 1
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    volumes:
+      - ./data:/app/data
 
   ray-worker-2:
     build: .
     depends_on:
       - ray-head
     command: >
-      bash -c "sleep 5 && ray start --address=ray-head:6379 --block"
+      bash -c "sleep 15 && ray start --address=ray-head:6379 --block" 
+    environment:
+      - RAY_DISABLE_DOCKER_CPU_WARNING=1
     deploy:
-      replicas: 1
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    volumes:
+      - ./data:/app/data

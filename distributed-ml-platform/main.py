@@ -5,15 +5,22 @@ import os
 import argparse
 import logging
 import time
-import json
 import sys
 import ray
-import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.svm import SVC
+from sklearn.ensemble import (
+    RandomForestClassifier, GradientBoostingClassifier, 
+    AdaBoostClassifier, ExtraTreesClassifier
+)
+from sklearn.linear_model import (
+    LogisticRegression, Ridge, Lasso, ElasticNet,
+    SGDClassifier, SGDRegressor
+)
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
+from sklearn.svm import SVC, SVR
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
+from sklearn.neural_network import MLPClassifier, MLPRegressor
+from sklearn.naive_bayes import GaussianNB
 
 from src.utils.ray_utils import initialize_ray, get_cluster_status
 from src.data.data_loader import load_and_preprocess_data
@@ -107,22 +114,65 @@ def main():
             
             logger.info(f"Training models for dataset {i+1}/{len(processed_datasets)}")
             
-            # Define models to train
-            models = [
-                RandomForestClassifier(),
-                GradientBoostingClassifier(),
-                LogisticRegression(max_iter=1000),
-                KNeighborsClassifier(),
-                SVC(probability=True)
-            ]
+            # Check if it's a classification or regression task
+            is_classification = len(np.unique(y_train)) < 10  # Assuming classification if fewer classes
             
-            model_names = [
-                f"RandomForest_ds{i+1}",
-                f"GradientBoosting_ds{i+1}",
-                f"LogisticRegression_ds{i+1}",
-                f"KNN_ds{i+1}",
-                f"SVC_ds{i+1}"
-            ]
+            if is_classification:
+                # Define classification models to train
+                models = [
+                    RandomForestClassifier(n_estimators=100),
+                    GradientBoostingClassifier(),
+                    LogisticRegression(max_iter=1000),
+                    KNeighborsClassifier(n_neighbors=5),
+                    SVC(probability=True, gamma='auto'),
+                    DecisionTreeClassifier(),
+                    AdaBoostClassifier(),
+                    ExtraTreesClassifier(),
+                    MLPClassifier(max_iter=500, hidden_layer_sizes=(50,50)),
+                    GaussianNB(),
+                    SGDClassifier(max_iter=1000)
+                ]
+                
+                model_names = [
+                    f"RandomForest_ds{i+1}",
+                    f"GradientBoosting_ds{i+1}",
+                    f"LogisticRegression_ds{i+1}",
+                    f"KNN_ds{i+1}",
+                    f"SVC_ds{i+1}",
+                    f"DecisionTree_ds{i+1}",
+                    f"AdaBoost_ds{i+1}",
+                    f"ExtraTrees_ds{i+1}",
+                    f"NeuralNet_ds{i+1}",
+                    f"NaiveBayes_ds{i+1}",
+                    f"SGD_ds{i+1}"
+                ]
+            else:
+                # Define regression models to train
+                models = [
+                    Ridge(alpha=1.0),
+                    Lasso(alpha=0.1),
+                    ElasticNet(alpha=0.1, l1_ratio=0.5),
+                    SVR(gamma='auto'),
+                    KNeighborsRegressor(n_neighbors=5),
+                    DecisionTreeRegressor(),
+                    RandomForestClassifier(n_estimators=100),
+                    GradientBoostingClassifier(),
+                    MLPRegressor(max_iter=500, hidden_layer_sizes=(50,50)),
+                    SGDRegressor(max_iter=1000)
+                ]
+                
+                model_names = [
+                    f"Ridge_ds{i+1}",
+                    f"Lasso_ds{i+1}",
+                    f"ElasticNet_ds{i+1}",
+                    f"SVR_ds{i+1}",
+                    f"KNNRegressor_ds{i+1}",
+                    f"DecisionTreeRegressor_ds{i+1}",
+                    f"RandomForestRegressor_ds{i+1}",
+                    f"GradientBoostingRegressor_ds{i+1}",
+                    f"NeuralNetRegressor_ds{i+1}",
+                    f"SGDRegressor_ds{i+1}"
+                ]
             
             # Train models
             dataset_models, dataset_metrics = train_multiple_models(
@@ -187,28 +237,7 @@ def main():
                 # Keep the main thread alive
                 while True:
                     time.sleep(10)
-                    
-                    # Generate inference visualizations
-                    if not args.no_plots:
-                        try:
-                            # Get metrics from the API
-                            metrics_response = api.app.test_client().get('/metrics')
-                            metrics_data = json.loads(metrics_response.data)
-                            
-                            request_counts = metrics_data.get('request_counts', {})
-                            latencies = metrics_data.get('average_latency_ms', {})
-                            
-                            if request_counts and latencies:
-                                plot_inference_metrics(
-                                    request_counts,
-                                    latencies,
-                                    output_dir=os.path.join(args.output_dir, 'plots', 'inference'),
-                                    save=True,
-                                    show=False
-                                )
-                        except Exception as e:
-                            logger.error(f"Error generating inference visualizations: {e}")
-            
+                    # We don't auto-generate inference plots in production
             except KeyboardInterrupt:
                 logger.info("Shutting down API...")
                 api.stop()

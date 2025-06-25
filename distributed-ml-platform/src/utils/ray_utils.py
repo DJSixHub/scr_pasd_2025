@@ -1,7 +1,6 @@
 """
 Ray utility functions for distributed computing
 """
-import os
 import ray
 import logging
 
@@ -33,11 +32,10 @@ def initialize_ray(address=None, local=True, log_to_driver=True):
                 logger.info("Initializing Ray locally")
                 ray.init(log_to_driver=log_to_driver)
             else:
-                # Auto-discover Ray cluster
                 logger.info("Auto-discovering Ray cluster")
                 ray.init(address="auto", log_to_driver=log_to_driver)
                 
-        logger.info(f"Ray initialized: {ray.cluster_resources()}")
+        logger.info(f"Ray initialized with resources: {ray.cluster_resources()}")
         return True
     except Exception as e:
         logger.error(f"Error initializing Ray: {e}")
