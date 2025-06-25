@@ -1,0 +1,40 @@
+version: '3'
+
+services:
+  # Ray head node (also serves the API)
+  ray-head:
+    build: .
+    ports:
+      - "8000:8000"  # API port
+      - "8265:8265"  # Ray dashboard
+      - "10001:10001"  # Ray client server
+      - "6379:6379"  # Redis
+    command: >
+      bash -c "ray start --head --port=6379 --dashboard-host=0.0.0.0 --block &&
+              python main.py --address=localhost:6379 --mode=serve --host=0.0.0.0 --port=8000"
+    volumes:
+      - ./output:/app/output
+    healthcheck:
+      test: ["CMD", "ray", "status"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+
+  # Ray worker nodes
+  ray-worker-1:
+    build: .
+    depends_on:
+      - ray-head
+    command: >
+      bash -c "sleep 5 && ray start --address=ray-head:6379 --block"
+    deploy:
+      replicas: 1
+
+  ray-worker-2:
+    build: .
+    depends_on:
+      - ray-head
+    command: >
+      bash -c "sleep 5 && ray start --address=ray-head:6379 --block"
+    deploy:
+      replicas: 1
