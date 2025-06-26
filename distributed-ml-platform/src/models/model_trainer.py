@@ -18,7 +18,7 @@ from functools import partial
 
 logger = logging.getLogger(__name__)
 
-@ray.remote(max_restarts=3, max_task_retries=3)  # Add fault tolerance with retries
+@ray.remote(max_retries=3)  # Add fault tolerance with retries
 def train_model(model, X_train, y_train, X_test, y_test, model_name=None, checkpoint_dir=None):
     """
     Train a single model in a distributed manner using Ray with checkpointing

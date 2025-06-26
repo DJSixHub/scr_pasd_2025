@@ -228,7 +228,6 @@ def create_fault_tolerant_actor(actor_cls, *args, **kwargs):
         ray.actor.ActorHandle: Handle to the created actor
     """
     return ray.remote(
-        max_restarts=-1,  # Infinite restarts
-        max_task_retries=3,
+        max_retries=5,  # Use max_retries instead of max_restarts
         num_cpus=kwargs.pop("num_cpus", 0.1),  # Default to minimal CPU
     )(actor_cls).remote(*args, **kwargs)
