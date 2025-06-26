@@ -15,7 +15,7 @@ def plot_training_metrics(metrics_dict, output_dir='plots', save=True, show=True
     Plot training metrics for multiple models
     
     Args:
-        metrics_dict (dict): Dictionary mapping model names to metrics dictionaries
+        metrics_dict (dict): Dictionary mapping model names to metrics dictionaries or scalar metrics
         output_dir (str): Directory to save plots
         save (bool): Whether to save the plots to disk
         show (bool): Whether to show the plots
@@ -33,9 +33,23 @@ def plot_training_metrics(metrics_dict, output_dir='plots', save=True, show=True
     if save:
         os.makedirs(output_dir, exist_ok=True)
     
+    # Handle case where metrics_dict values are scalar (not dictionaries)
+    # Convert simple scalar metrics to a dictionary with a single 'performance' key
+    is_scalar_metrics = False
+    first_value = next(iter(metrics_dict.values())) if metrics_dict else None
+    if first_value is not None and not isinstance(first_value, dict):
+        is_scalar_metrics = True
+        # Convert to a uniform format
+        metrics_dict_normalized = {
+            model_name: {'performance': metric_value}
+            for model_name, metric_value in metrics_dict.items()
+        }
+    else:
+        metrics_dict_normalized = metrics_dict
+    
     # Determine which metrics are available
     all_metric_keys = set()
-    for model_metrics in metrics_dict.values():
+    for model_metrics in metrics_dict_normalized.values():
         all_metric_keys.update(model_metrics.keys())
     
     # Remove training_time for separate plot
@@ -43,17 +57,24 @@ def plot_training_metrics(metrics_dict, output_dir='plots', save=True, show=True
     
     # Plot performance metrics
     plt.figure(figsize=(12, 8))
-    x = np.arange(len(metrics_dict))
-    width = 0.8 / len(metric_keys)
+    x = np.arange(len(metrics_dict_normalized))
+    width = 0.8 / max(len(metric_keys), 1)  # Avoid division by zero
     
     for i, metric_name in enumerate(metric_keys):
-        values = [metrics.get(metric_name, 0) for model, metrics in metrics_dict.items()]
+        values = [metrics.get(metric_name, 0) for model, metrics in metrics_dict_normalized.items()]
         plt.bar(x + i * width, values, width, label=metric_name)
     
     plt.xlabel('Models')
     plt.ylabel('Score')
-    plt.title('Model Performance Metrics')
-    plt.xticks(x + width * (len(metric_keys) - 1) / 2, metrics_dict.keys(), rotation=45)
+    
+    # Set appropriate title based on metrics type
+    if is_scalar_metrics:
+        performance_type = "Accuracy" if max(metrics_dict.values(), default=0) <= 1.0 else "Performance"
+        plt.title(f'Model {performance_type} Comparison')
+    else:
+        plt.title('Model Performance Metrics')
+        
+    plt.xticks(x + width * (len(metric_keys) - 1) / 2, metrics_dict_normalized.keys(), rotation=45)
     plt.legend()
     plt.tight_layout()
     
@@ -70,9 +91,9 @@ def plot_training_metrics(metrics_dict, output_dir='plots', save=True, show=True
     
     # Plot training time
     plt.figure(figsize=(10, 6))
-    training_times = [metrics.get('training_time', 0) for model, metrics in metrics_dict.items()]
+    training_times = [metrics.get('training_time', 0) for model, metrics in metrics_dict_normalized.items()]
     
-    plt.bar(metrics_dict.keys(), training_times, color='skyblue')
+    plt.bar(metrics_dict_normalized.keys(), training_times, color='skyblue')
     plt.xlabel('Models')
     plt.ylabel('Training Time (seconds)')
     plt.title('Model Training Times')

@@ -275,16 +275,20 @@ def main():
             )
             
             # Generate comparison plots for common metrics
-            common_metrics = ['accuracy', 'precision', 'recall', 'f1']
-            for metric in common_metrics:
-                if all(metric in metrics for metrics in training_metrics.values()):
-                    plot_model_comparison(
-                        training_metrics,
-                        metric_name=metric,
-                        output_dir=os.path.join(args.output_dir, 'plots'),
-                        save=True,
-                        show=args.show_plots
-                    )
+            # Check if metrics are dictionaries (not scalar values)
+            has_detailed_metrics = all(isinstance(metrics, dict) for metrics in training_metrics.values())
+            
+            if has_detailed_metrics:
+                common_metrics = ['accuracy', 'precision', 'recall', 'f1']
+                for metric in common_metrics:
+                    if all(metric in metrics for metrics in training_metrics.values()):
+                        plot_model_comparison(
+                            training_metrics,
+                            metric_name=metric,
+                            output_dir=os.path.join(args.output_dir, 'plots'),
+                            save=True,
+                            show=args.show_plots
+                        )
     
     # Serving phase
     if args.mode in ['serve', 'all']:

@@ -1,5 +1,3 @@
-version: '3'
-
 services:
   # Ray head node (handles both training and serving)
   ray-head:
@@ -12,7 +10,9 @@ services:
     command: >
       bash -c "ray start --head --port=6379 --dashboard-host=0.0.0.0 --dashboard-port=8265 --block &
               sleep 5 &&
-              python main.py --mode=all --data=data/iris.csv data/wine.csv data/breast_cancer.csv data/digits.csv --target=target --output-dir=/app/output --host=0.0.0.0 --port=8000 --ray-redundancy=2 --failure-tolerant"
+              python main.py --mode=all --data data/iris.csv --data data/wine.csv --data data/breast_cancer.csv --data data/digits.csv --target=target --output-dir=/app/output --host=0.0.0.0 --port=8000 --ray-redundancy=2 --failure-tolerant &&
+              echo 'Keeping container alive to serve API requests...' &&
+              tail -f /dev/null"
     volumes:
       - ./output:/app/output
       - ./data:/app/data

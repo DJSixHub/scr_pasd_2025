@@ -51,7 +51,7 @@ class ModelPredictor:
         if len(self.request_times[model_name]) > 100:
             self.request_times[model_name] = self.request_times[model_name][-100:]
     
-    async def health(self, _):
+    def health(self, _):
         """Health check endpoint"""
         return {
             'status': 'healthy',
@@ -59,7 +59,7 @@ class ModelPredictor:
             'model_names': list(self.models.keys())
         }
     
-    async def list_models(self, _):
+    def list_models(self, _):
         """List available models"""
         return {
             'models': list(self.models.keys())
@@ -70,17 +70,19 @@ class ModelPredictor:
         start_time = time.time()
         
         if model_name not in self.models:
-            return {
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail={
                 'error': f'Model {model_name} not found',
                 'available_models': list(self.models.keys())
-            }, 404
+            })
             
         try:
             # Validate request data
             try:
                 prediction_request = PredictionFeatures(**request_dict)
             except Exception as e:
-                return {'error': f'Invalid request format: {str(e)}'}, 400
+                from fastapi import HTTPException
+                raise HTTPException(status_code=400, detail={'error': f'Invalid request format: {str(e)}'})
                 
             features = pd.DataFrame(prediction_request.features)
             
@@ -99,9 +101,12 @@ class ModelPredictor:
             
         except Exception as e:
             logger.error(f"Error making prediction with model {model_name}: {e}")
-            return {'error': str(e)}, 500
+            from fastapi import HTTPException
+            if isinstance(e, HTTPException):
+                raise e
+            raise HTTPException(status_code=500, detail={'error': str(e)})
     
-    async def metrics(self, _):
+    def metrics(self, _):
         """Get model serving metrics"""
         return {
             'request_counts': self.request_counts,
@@ -162,19 +167,62 @@ class ModelServer:
             # Start Ray Serve
             if not ray.is_initialized():
                 ray.init()
-                
-            serve.start(detached=True, http_options={"host": self.host, "port": self.port})
+            
+            # For Ray 2.7.1, the start API has changed
+            serve.start(detached=True, host=self.host, port=self.port)
             
             # Deploy the model predictor
             predictor = ModelPredictor(self.models)
-            predictor_deployment = serve.deployment(name="predictor")(lambda models: predictor)
-            self.predictor_handle = predictor_deployment.deploy(self.models)
             
-            # Set up routes
-            serve.ingress("health", route_prefix="/health").bind(predictor.health)
-            serve.ingress("models", route_prefix="/models").bind(predictor.list_models)
-            serve.ingress("predict", route_prefix="/predict/{model_name}").bind(predictor.predict)
-            serve.ingress("metrics", route_prefix="/metrics").bind(predictor.metrics)
+            # Updated deployment pattern for Ray Serve 2.7.1 using FastAPI for routing
+            from fastapi import FastAPI, Request, HTTPException
+            from starlette.responses import JSONResponse
+            
+            app = FastAPI()
+            
+            @app.get("/health")
+            async def health():
+                return predictor.health(None)
+                
+            @app.get("/models")
+            async def list_models():
+                return predictor.list_models(None)
+                
+            @app.get("/predict/{model_name}")
+            async def predict(request: Request, model_name: str):
+                request_dict = await request.json()
+                return await predictor.predict(request_dict, model_name)
+                
+            @app.get("/metrics")
+            async def metrics():
+                return predictor.metrics(None)
+            
+            @app.exception_handler(Exception)
+            async def exception_handler(request: Request, exc: Exception):
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": str(exc)}
+                )
+                
+            # Deploy the FastAPI app with Ray Serve
+            @serve.deployment(name="api", route_prefix="/")
+            class APIDeployment:
+                def __init__(self):
+                    self.app = app
+                    self.predictor = predictor
+                    
+                @property
+                def predictor_ref(self):
+                    return predictor
+                
+                async def __call__(self, request):
+                    return await self.app(request)
+            
+            # Deploy the API
+            api_deployment = APIDeployment.bind()
+            serve.run(api_deployment)
+            
+            self.predictor_handle = predictor
             
             self.is_running = True
             logger.info(f"Started model server at http://{self.host}:{self.port}")
