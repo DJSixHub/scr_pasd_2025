@@ -6,8 +6,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Create output directories
-RUN mkdir -p output/models output/plots
+# Copy all datasets into the image for distributed use
+COPY data/ /app/data/
+# Create output and backup directories for in-container use
+RUN mkdir -p /app/output /app/output/models /app/output/plots /app/output_backup /app/data_backup
 
 # Copy application code
 COPY . .

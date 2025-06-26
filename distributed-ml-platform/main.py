@@ -22,10 +22,12 @@ from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.naive_bayes import GaussianNB
 
+from ray import serve
+
 from src.utils.ray_utils import initialize_ray, get_cluster_status
 from src.data.data_loader import load_and_preprocess_data
 from src.models.model_trainer import train_multiple_models, save_models, load_models
-from src.serving.api import create_api
+from src.serving.api import create_app
 from src.visualization.visualizer import plot_training_metrics, plot_model_comparison, plot_inference_metrics
 
 # Configure logging
@@ -178,62 +180,32 @@ def main():
             is_classification = len(np.unique(y_train)) < 10  # Assuming classification if fewer classes
             
             if is_classification:
-                # Define classification models to train
+                # Define classification models to train (3 models for fast testing)
                 models = [
                     RandomForestClassifier(n_estimators=100),
-                    GradientBoostingClassifier(),
                     LogisticRegression(max_iter=1000),
-                    KNeighborsClassifier(n_neighbors=5),
-                    SVC(probability=True, gamma='auto'),
-                    DecisionTreeClassifier(),
-                    AdaBoostClassifier(),
-                    ExtraTreesClassifier(),
-                    MLPClassifier(max_iter=500, hidden_layer_sizes=(50,50)),
-                    GaussianNB(),
-                    SGDClassifier(max_iter=1000)
+                    GradientBoostingClassifier()
                 ]
                 
                 model_names = [
                     f"RandomForest_ds{i+1}",
-                    f"GradientBoosting_ds{i+1}",
                     f"LogisticRegression_ds{i+1}",
-                    f"KNN_ds{i+1}",
-                    f"SVC_ds{i+1}",
-                    f"DecisionTree_ds{i+1}",
-                    f"AdaBoost_ds{i+1}",
-                    f"ExtraTrees_ds{i+1}",
-                    f"NeuralNet_ds{i+1}",
-                    f"NaiveBayes_ds{i+1}",
-                    f"SGD_ds{i+1}"
+                    f"GradientBoosting_ds{i+1}"
                 ]
             else:
-                # Define regression models to train
+                # Define regression models to train (3 models for fast testing)
                 models = [
                     Ridge(alpha=1.0),
-                    Lasso(alpha=0.1),
                     ElasticNet(alpha=0.1, l1_ratio=0.5),
-                    SVR(gamma='auto'),
-                    KNeighborsRegressor(n_neighbors=5),
-                    DecisionTreeRegressor(),
-                    RandomForestClassifier(n_estimators=100),
-                    GradientBoostingClassifier(),
-                    MLPRegressor(max_iter=500, hidden_layer_sizes=(50,50)),
-                    SGDRegressor(max_iter=1000)
+                    DecisionTreeRegressor()
                 ]
                 
                 model_names = [
                     f"Ridge_ds{i+1}",
-                    f"Lasso_ds{i+1}",
                     f"ElasticNet_ds{i+1}",
-                    f"SVR_ds{i+1}",
-                    f"KNNRegressor_ds{i+1}",
-                    f"DecisionTreeRegressor_ds{i+1}",
-                    f"RandomForestRegressor_ds{i+1}",
-                    f"GradientBoostingRegressor_ds{i+1}",
-                    f"NeuralNetRegressor_ds{i+1}",
-                    f"SGDRegressor_ds{i+1}"
+                    f"DecisionTreeRegressor_ds{i+1}"
                 ]
-            
+        
             # Train models with fault tolerance
             dataset_models, dataset_metrics = train_multiple_models(
                 models, X_train, y_train, X_test, y_test, model_names,
@@ -293,7 +265,6 @@ def main():
     # Serving phase
     if args.mode in ['serve', 'all']:
         logger.info("Starting serving phase")
-        
         if not trained_models:
             logger.info("No models trained in this session, loading from disk")
             
@@ -340,9 +311,28 @@ def main():
             
             logger.info(f"Loaded {len(trained_models)} models for serving")
         
-        # Create and start the API server
-        logger.info(f"Starting API server on {args.host}:{args.port}")
-        create_api(trained_models, host=args.host, port=args.port)
+        # Ray Serve deployment
+        logger.info(f"Starting Ray Serve API deployment on {args.host}:{args.port}")
+        if not ray.is_initialized():
+            ray.init()
+        serve.start(detached=True, host=args.host, port=args.port)
+        app, predictor = create_app(trained_models)
+        @serve.deployment(name="api")
+        @serve.ingress(app)
+        class FastAPIDeployment:
+            def __init__(self):
+                pass
+        serve.run(FastAPIDeployment.bind(), route_prefix="/")
+        logger.info(f"API server deployed and running at http://{args.host}:{args.port}")
+        # Block to keep the process alive if needed
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            logger.info("Shutting down API server...")
+            serve.shutdown()
+            logger.info("API server shut down")
+            sys.exit(0)
 
     # Shutdown Ray
     ray.shutdown()

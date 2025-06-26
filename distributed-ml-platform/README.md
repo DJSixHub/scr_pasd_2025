@@ -68,26 +68,26 @@ python main.py --mode train --data path/to/dataset1.csv path/to/dataset2.csv --t
 
 #### Serving Models
 
-Start the API server with trained models:
+Start the API server with trained models (no host volumes required):
 
 ```
-python main.py --mode serve --model-dir output/models
+docker compose up
 ```
 
 #### Training and Serving
 
-Perform both operations:
+Perform both operations (all data is available inside the container):
 
 ```
-python main.py --mode all --data path/to/dataset.csv --target target_column
+docker compose up
 ```
 
 ### Docker Deployment
 
-Deploy the distributed platform with Docker Compose:
+Deploy the distributed platform with Docker Compose (no host volumes):
 
 ```
-docker-compose up
+docker compose up
 ```
 
 ## API Endpoints
@@ -97,6 +97,13 @@ docker-compose up
 - `POST /predict/<model_name>` - Make predictions with a specific model
 - `GET /metrics` - Get serving metrics
 
-## Additional Parameters
+## Data and Output
 
-Run `python main.py --help` for a complete list of command-line options.
+- All datasets are included in the image at build time.
+- All output (models, plots, metrics) is stored inside the container.
+- To extract results, use `docker cp` or expose an API endpoint for download.
+
+## Note on Volumes
+
+- This deployment does **not** use Docker volumes. All coordination is handled by Ray over the network.
+- Data loss may occur if a container is deleted. For persistence, consider uploading results to a remote location.

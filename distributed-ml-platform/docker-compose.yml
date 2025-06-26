@@ -10,13 +10,9 @@ services:
     command: >
       bash -c "ray start --head --port=6379 --dashboard-host=0.0.0.0 --dashboard-port=8265 --block &
               sleep 5 &&
-              python main.py --mode=all --data data/iris.csv --data data/wine.csv --data data/breast_cancer.csv --data data/digits.csv --target=target --output-dir=/app/output --host=0.0.0.0 --port=8000 --ray-redundancy=2 --failure-tolerant &&
+              python main.py --mode=all --data /app/data/iris.csv --data /app/data/wine.csv --data /app/data/breast_cancer.csv --target=target --output-dir=/app/output --host=0.0.0.0 --port=8000 --ray-redundancy=2 --failure-tolerant &&
               echo 'Keeping container alive to serve API requests...' &&
               tail -f /dev/null"
-    volumes:
-      - ./output:/app/output
-      - ./data:/app/data
-      - ray_data:/tmp/ray_data  # Shared data for Ray
     environment:
       - RAY_DISABLE_DOCKER_CPU_WARNING=1
       - PYTHONUNBUFFERED=1
@@ -29,7 +25,7 @@ services:
       resources:
         limits:
           cpus: '2.0'
-          memory: 2G
+          memory: 6G
       restart_policy:
         condition: on-failure
         max_attempts: 3
@@ -41,16 +37,13 @@ services:
       - ray-head
     command: >
       bash -c "sleep 10 && ray start --address=ray-head:6379 --block"
-    volumes:
-      - ./data:/app/data:ro  # Read-only data access
-      - ray_data:/tmp/ray_data  # Shared data for Ray
     environment:
       - RAY_DISABLE_DOCKER_CPU_WARNING=1
     deploy:
       resources:
         limits:
           cpus: '1.0'
-          memory: 1G
+          memory: 3G
       restart_policy:
         condition: on-failure
         max_attempts: 3
@@ -61,42 +54,13 @@ services:
       - ray-head
     command: >
       bash -c "sleep 12 && ray start --address=ray-head:6379 --block"
-    volumes:
-      - ./data:/app/data:ro  # Read-only data access
-      - ray_data:/tmp/ray_data  # Shared data for Ray
     environment:
       - RAY_DISABLE_DOCKER_CPU_WARNING=1
     deploy:
       resources:
         limits:
           cpus: '1.0'
-          memory: 1G
+          memory: 3G
       restart_policy:
         condition: on-failure
         max_attempts: 3
-
-  # Data redundancy service
-  data-sync:
-    build: .
-    depends_on:
-      - ray-head
-    command: >
-      bash -c "
-      mkdir -p /app/data_backup && 
-      while true; do 
-        cp -r /app/data/* /app/data_backup/ &&
-        cp -r /app/output/* /app/output_backup/ &&
-        echo 'Data sync completed' &&
-        sleep 300; 
-      done"
-    volumes:
-      - ./data:/app/data:ro
-      - ./data_backup:/app/data_backup
-      - ./output:/app/output:ro
-      - ./output_backup:/app/output_backup
-    deploy:
-      restart_policy:
-        condition: any
-
-volumes:
-  ray_data:  # Shared volume for Ray data
