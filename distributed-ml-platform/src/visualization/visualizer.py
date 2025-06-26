@@ -7,6 +7,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import seaborn as sns
+import io
+import base64
+from sklearn.metrics import roc_curve, auc
 
 logger = logging.getLogger(__name__)
 
@@ -224,3 +227,126 @@ def plot_inference_metrics(request_counts, latencies, output_dir='plots', save=T
         plt.close()
     
     return saved_paths
+
+def plot_roc_curve_to_png(roc_data, model_name, return_base64=False):
+    """
+    Generate ROC curve plot as PNG image
+    
+    Args:
+        roc_data (dict): ROC curve data with fpr, tpr, auc for each class
+        model_name (str): Name of the model
+        return_base64 (bool): Whether to return base64 encoded string
+        
+    Returns:
+        bytes or str: PNG image bytes or base64 encoded string
+    """
+    plt.figure(figsize=(10, 8))
+    
+    if roc_data.get('type') == 'multiclass':
+        # Plot ROC curve for each class
+        classes = roc_data.get('classes', {})
+        colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown']
+        
+        for i, (class_name, class_data) in enumerate(classes.items()):
+            if 'fpr' in class_data and 'tpr' in class_data:
+                color = colors[i % len(colors)]
+                plt.plot(
+                    class_data['fpr'], 
+                    class_data['tpr'], 
+                    color=color,
+                    lw=2, 
+                    label=f'{class_name} (AUC = {class_data.get("auc", 0.0):.2f})'
+                )
+    else:
+        # Binary classification
+        if 'fpr' in roc_data and 'tpr' in roc_data:
+            plt.plot(
+                roc_data['fpr'], 
+                roc_data['tpr'], 
+                color='darkorange',
+                lw=2, 
+                label=f'ROC curve (AUC = {roc_data.get("auc", 0.0):.2f})'
+            )
+    
+    # Plot diagonal line
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', alpha=0.8)
+    
+    # Customize plot
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate', fontsize=12)
+    plt.ylabel('True Positive Rate', fontsize=12)
+    plt.title(f'ROC Curve - {model_name}', fontsize=14, fontweight='bold')
+    plt.legend(loc="lower right")
+    plt.grid(True, alpha=0.3)
+    
+    # Save to bytes
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight')
+    buffer.seek(0)
+    
+    if return_base64:
+        img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        plt.close()
+        return img_base64
+    else:
+        img_bytes = buffer.getvalue()
+        plt.close()
+        return img_bytes
+
+def plot_learning_curve_to_png(learning_data, model_name, return_base64=False):
+    """
+    Generate learning curve plot as PNG image
+    
+    Args:
+        learning_data (dict): Learning curve data with train_sizes, scores, etc.
+        model_name (str): Name of the model
+        return_base64 (bool): Whether to return base64 encoded string
+        
+    Returns:
+        bytes or str: PNG image bytes or base64 encoded string
+    """
+    plt.figure(figsize=(10, 6))
+    
+    train_sizes = learning_data.get('train_sizes', [])
+    train_scores_mean = learning_data.get('train_scores_mean', [])
+    train_scores_std = learning_data.get('train_scores_std', [])
+    val_scores_mean = learning_data.get('val_scores_mean', [])
+    val_scores_std = learning_data.get('val_scores_std', [])
+    
+    if train_sizes and train_scores_mean and val_scores_mean:
+        # Plot training scores
+        plt.plot(train_sizes, train_scores_mean, 'o-', color='blue', label='Training score')
+        if train_scores_std:
+            plt.fill_between(train_sizes, 
+                           np.array(train_scores_mean) - np.array(train_scores_std),
+                           np.array(train_scores_mean) + np.array(train_scores_std), 
+                           alpha=0.2, color='blue')
+        
+        # Plot validation scores
+        plt.plot(train_sizes, val_scores_mean, 'o-', color='red', label='Validation score')
+        if val_scores_std:
+            plt.fill_between(train_sizes, 
+                           np.array(val_scores_mean) - np.array(val_scores_std),
+                           np.array(val_scores_mean) + np.array(val_scores_std), 
+                           alpha=0.2, color='red')
+    
+    plt.xlabel('Training Set Size', fontsize=12)
+    plt.ylabel('Score', fontsize=12)
+    plt.title(f'Learning Curve - {model_name}', fontsize=14, fontweight='bold')
+    plt.legend(loc='best')
+    plt.grid(True, alpha=0.3)
+    
+    # Save to bytes
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight')
+    buffer.seek(0)
+    
+    if return_base64:
+        img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        plt.close()
+        return img_base64
+    else:
+        img_bytes = buffer.getvalue()
+        plt.close()
+        return img_bytes

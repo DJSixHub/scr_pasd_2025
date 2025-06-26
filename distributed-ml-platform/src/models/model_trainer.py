@@ -349,14 +349,81 @@ class ModelActor:
 
     def generate_plot_data(self):
         """
-        Generate both ROC curve and learning curve data.
+        Generate all plot data for the model (ROC curve and learning curve).
         
         Returns:
-            Dictionary with both plot types
+            A dictionary containing both ROC curve and learning curve data, plus metrics.
         """
         return {
             'roc_curve': self.generate_roc_curve(),
             'learning_curve': self.generate_learning_curve(),
             'model_name': self.model_name,
             'metrics': self.metrics
+        }
+    
+    def generate_roc_png(self):
+        """
+        Generate ROC curve as PNG image (base64 encoded).
+        
+        Returns:
+            A dictionary containing the PNG image as base64 string.
+        """
+        try:
+            import sys
+            import os
+            sys.path.append('/app')
+            from src.visualization.visualizer import plot_roc_curve_to_png
+            
+            roc_data = self.generate_roc_curve()
+            if 'error' in roc_data:
+                return {'error': roc_data['error']}
+            
+            png_base64 = plot_roc_curve_to_png(roc_data, self.model_name, return_base64=True)
+            return {
+                'model_name': self.model_name,
+                'roc_curve_png': png_base64,
+                'format': 'png',
+                'encoding': 'base64'
+            }
+        except Exception as e:
+            return {'error': f'Failed to generate ROC curve PNG: {str(e)}'}
+    
+    def generate_learning_curve_png(self):
+        """
+        Generate learning curve as PNG image (base64 encoded).
+        
+        Returns:
+            A dictionary containing the PNG image as base64 string.
+        """
+        try:
+            import sys
+            import os
+            sys.path.append('/app')
+            from src.visualization.visualizer import plot_learning_curve_to_png
+            
+            learning_data = self.generate_learning_curve()
+            if 'error' in learning_data:
+                return {'error': learning_data['error']}
+            
+            png_base64 = plot_learning_curve_to_png(learning_data, self.model_name, return_base64=True)
+            return {
+                'model_name': self.model_name,
+                'learning_curve_png': png_base64,
+                'format': 'png',
+                'encoding': 'base64'
+            }
+        except Exception as e:
+            return {'error': f'Failed to generate learning curve PNG: {str(e)}'}
+    
+    def generate_plots_png(self):
+        """
+        Generate both ROC curve and learning curve as PNG images.
+        
+        Returns:
+            A dictionary containing both PNG images as base64 strings.
+        """
+        return {
+            'roc_curve': self.generate_roc_png(),
+            'learning_curve': self.generate_learning_curve_png(),
+            'model_name': self.model_name
         }

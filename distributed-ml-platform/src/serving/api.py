@@ -188,6 +188,68 @@ def create_app(model_names):
         
         return {'all_plots': all_plots}
 
+    @app.get("/model-plots-png/{model_name}")
+    async def get_model_plots_png(model_name: str):
+        """Get ROC curve and learning curve as PNG images for a specific model"""
+        if model_name not in predictor.model_names:
+            raise HTTPException(status_code=404, detail={
+                'error': f'Model {model_name} not found',
+                'available_models': list(predictor.model_names)
+            })
+        
+        try:
+            actor = ray.get_actor(model_name)
+            plot_pngs = ray.get(actor.generate_plots_png.remote())
+            return plot_pngs
+        except Exception as e:
+            raise HTTPException(status_code=500, detail={'error': str(e)})
+
+    @app.get("/model-roc-png/{model_name}")
+    async def get_model_roc_png(model_name: str):
+        """Get ROC curve as PNG image for a specific model"""
+        if model_name not in predictor.model_names:
+            raise HTTPException(status_code=404, detail={
+                'error': f'Model {model_name} not found',
+                'available_models': list(predictor.model_names)
+            })
+        
+        try:
+            actor = ray.get_actor(model_name)
+            roc_png = ray.get(actor.generate_roc_png.remote())
+            return roc_png
+        except Exception as e:
+            raise HTTPException(status_code=500, detail={'error': str(e)})
+
+    @app.get("/model-learning-curve-png/{model_name}")
+    async def get_model_learning_curve_png(model_name: str):
+        """Get learning curve as PNG image for a specific model"""
+        if model_name not in predictor.model_names:
+            raise HTTPException(status_code=404, detail={
+                'error': f'Model {model_name} not found',
+                'available_models': list(predictor.model_names)
+            })
+        
+        try:
+            actor = ray.get_actor(model_name)
+            learning_png = ray.get(actor.generate_learning_curve_png.remote())
+            return learning_png
+        except Exception as e:
+            raise HTTPException(status_code=500, detail={'error': str(e)})
+
+    @app.get("/all-plots-png")
+    async def get_all_plots_png():
+        """Get ROC curves and learning curves as PNG images for all models"""
+        all_plots_png = {}
+        for model_name in predictor.model_names:
+            try:
+                actor = ray.get_actor(model_name)
+                plot_pngs = ray.get(actor.generate_plots_png.remote())
+                all_plots_png[model_name] = plot_pngs
+            except Exception as e:
+                all_plots_png[model_name] = {'error': str(e)}
+        
+        return {'all_plots_png': all_plots_png}
+
     @app.exception_handler(Exception)
     async def exception_handler(request: Request, exc: Exception):
         return JSONResponse(
