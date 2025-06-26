@@ -190,6 +190,12 @@ class ModelActor:
         """
         import pandas as pd
         X = pd.DataFrame(features)
+        
+        # Ensure columns are in the correct order if the model has feature_names_in_
+        if hasattr(self.model, 'feature_names_in_'):
+            # Reorder columns to match training order
+            X = X[self.model.feature_names_in_]
+        
         preds = self.model.predict(X)
         return preds.tolist()
     

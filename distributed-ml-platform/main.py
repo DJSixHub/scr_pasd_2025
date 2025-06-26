@@ -277,27 +277,24 @@ def main():
             sys.exit(1)
         logger.info(f"Found {len(model_names)} distributed model actors for serving: {model_names}")
         # Pass only model names to the API, which will use Ray to route requests
-        from src.serving.api import create_app
         app, _ = create_app(model_names)
-        from ray import serve
-        serve.start(detached=True, host=args.host, port=args.port)
-        @serve.deployment(name="api")
-        @serve.ingress(app)
-        class FastAPIDeployment:
-            def __init__(self):
-                pass
-        serve.run(FastAPIDeployment.bind(), route_prefix="/")
-        logger.info(f"API server deployed and running at http://{args.host}:{args.port}")
+        
+        # Run FastAPI directly with Uvicorn instead of Ray Serve for simplicity
+        import uvicorn
+        logger.info(f"Starting API server at http://{args.host}:{args.port}")
+        
+        # Run the server in a way that allows graceful shutdown
+        config = uvicorn.Config(app=app, host=args.host, port=args.port, log_level="info")
+        server = uvicorn.Server(config)
+        
         try:
-            while True:
-                time.sleep(3600)
+            server.run()
         except KeyboardInterrupt:
             logger.info("Shutting down API server...")
-            serve.shutdown()
-            logger.info("API server shut down")
-            sys.exit(0)
-    ray.shutdown()
-    logger.info("Shut down Ray")
+        finally:
+            if ray.is_initialized():
+                ray.shutdown()
+                logger.info("Shut down Ray")
     
 if __name__ == "__main__":
     main()

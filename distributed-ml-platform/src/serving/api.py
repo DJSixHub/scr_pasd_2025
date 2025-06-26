@@ -73,7 +73,7 @@ class ModelPredictor:
                 actor = ray.get_actor(model_name)
             except Exception:
                 raise HTTPException(status_code=404, detail={'error': f'Model actor {model_name} not found in Ray cluster'})
-            result = await ray.get(actor.predict.remote(features))
+            result = ray.get(actor.predict.remote(features))
             latency = time.time() - start_time
             self._record_request(model_name, latency)
             return {

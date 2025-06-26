@@ -38,16 +38,19 @@ def initialize_ray(address=None, local=True, log_to_driver=True, num_retries=5, 
                 }
             }
                 
+            # Use a consistent namespace for all services
+            namespace = "distributed-ml"
+            
             if address:
-                logger.info(f"Connecting to Ray cluster at {address}")
-                ray.init(address=address, log_to_driver=log_to_driver, runtime_env=runtime_env)
+                logger.info(f"Connecting to Ray cluster at {address} with namespace '{namespace}'")
+                ray.init(address=address, log_to_driver=log_to_driver, runtime_env=runtime_env, namespace=namespace)
             else:
                 if local:
-                    logger.info("Initializing Ray locally")
-                    ray.init(log_to_driver=log_to_driver, runtime_env=runtime_env)
+                    logger.info(f"Initializing Ray locally with namespace '{namespace}'")
+                    ray.init(log_to_driver=log_to_driver, runtime_env=runtime_env, namespace=namespace)
                 else:
-                    logger.info("Auto-discovering Ray cluster")
-                    ray.init(address="auto", log_to_driver=log_to_driver, runtime_env=runtime_env)
+                    logger.info(f"Auto-discovering Ray cluster with namespace '{namespace}'")
+                    ray.init(address="auto", log_to_driver=log_to_driver, runtime_env=runtime_env, namespace=namespace)
                     
             logger.info(f"Ray initialized with resources: {ray.cluster_resources()}")
             return True

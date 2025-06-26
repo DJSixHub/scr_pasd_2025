@@ -1,17 +1,13 @@
 services:
-  # Ray head node (serving only, persistent)
+  # Ray head node (cluster only)
   ray-head:
     build: .
     ports:
-      - "8000:8000"  # API port
       - "8265:8265"  # Ray dashboard
       - "10001:10001"  # Ray client server
       - "6379:6379"  # Redis
     command: >
-      bash -c "ray start --head --port=6379 --dashboard-host=0.0.0.0 --dashboard-port=8265 --block &
-              sleep 5 &&
-              python main.py --mode=serve --host=0.0.0.0 --port=8000 --output-dir=/app/output --address=ray-head:6379 &&
-              tail -f /dev/null"
+      bash -c "ray start --head --port=6379 --dashboard-host=0.0.0.0 --dashboard-port=8265 --ray-client-server-port=10001 --object-manager-port=6380 --disable-usage-stats --block"
     environment:
       - RAY_DISABLE_DOCKER_CPU_WARNING=1
       - PYTHONUNBUFFERED=1
@@ -75,13 +71,41 @@ services:
     build: .
     depends_on:
       - ray-head
+      - ray-worker-1
+      - ray-worker-2
     command: >
-      bash -c "for i in {1..30}; do nc -z ray-head 6379 && break; echo 'Waiting for Ray head...'; sleep 2; done; python main.py --mode=train --data /app/data/iris.csv /app/data/wine.csv /app/data/breast_cancer.csv --target=target --output-dir=/app/output --ray-redundancy=2 --failure-tolerant --address=ray-head:6379"
+      bash -c "for i in {1..30}; do nc -z ray-head 6379 && break; echo 'Waiting for Ray head...'; sleep 2; done; \
+               python main.py --mode=train --data /app/data/iris.csv /app/data/wine.csv /app/data/breast_cancer.csv --target=target --output-dir=/app/output --ray-redundancy=2 --failure-tolerant --address=ray://ray-head:10001"
+    environment:
+      - RAY_DISABLE_DOCKER_CPU_WARNING=1
+      - PYTHONUNBUFFERED=1
+      - RAY_ADDRESS=ray-head:6379
+    shm_size: '2gb'
+    deploy:
+      restart_policy:
+        condition: none
+
+  # API serving service (persistent)
+  api-server:
+    build: .
+    depends_on:
+      - ray-head
+      - trainer
+    ports:
+      - "8000:8000"  # API port
+    command: >
+      bash -c "for i in {1..60}; do nc -z ray-head 6379 && break; echo 'Waiting for Ray head...'; sleep 2; done; \
+               python main.py --mode=serve --host=0.0.0.0 --port=8000 --output-dir=/app/output --address=ray://ray-head:10001"
     environment:
       - RAY_DISABLE_DOCKER_CPU_WARNING=1
       - PYTHONUNBUFFERED=1
       - RAY_ADDRESS=ray-head:6379
     deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 4G
       restart_policy:
-        condition: none
+        condition: on-failure
+        max_attempts: 3
     shm_size: '2gb'
