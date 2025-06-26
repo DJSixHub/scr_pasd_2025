@@ -125,6 +125,69 @@ def create_app(model_names):
     async def metrics():
         return predictor.metrics()
 
+    @app.get("/model-metrics/{model_name}")
+    async def get_model_metrics(model_name: str):
+        """Get training metrics for a specific model"""
+        if model_name not in predictor.model_names:
+            raise HTTPException(status_code=404, detail={
+                'error': f'Model {model_name} not found',
+                'available_models': list(predictor.model_names)
+            })
+        
+        try:
+            actor = ray.get_actor(model_name)
+            metrics = ray.get(actor.get_metrics.remote())
+            return {
+                'model': model_name,
+                'metrics': metrics
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail={'error': str(e)})
+
+    @app.get("/all-metrics")
+    async def get_all_metrics():
+        """Get training metrics for all models"""
+        all_metrics = {}
+        for model_name in predictor.model_names:
+            try:
+                actor = ray.get_actor(model_name)
+                metrics = ray.get(actor.get_metrics.remote())
+                all_metrics[model_name] = metrics
+            except Exception as e:
+                all_metrics[model_name] = {'error': str(e)}
+        
+        return {'all_metrics': all_metrics}
+
+    @app.get("/model-plots/{model_name}")
+    async def get_model_plots(model_name: str):
+        """Get ROC curve and learning curve data for a specific model"""
+        if model_name not in predictor.model_names:
+            raise HTTPException(status_code=404, detail={
+                'error': f'Model {model_name} not found',
+                'available_models': list(predictor.model_names)
+            })
+        
+        try:
+            actor = ray.get_actor(model_name)
+            plot_data = ray.get(actor.generate_plot_data.remote())
+            return plot_data
+        except Exception as e:
+            raise HTTPException(status_code=500, detail={'error': str(e)})
+
+    @app.get("/all-plots")
+    async def get_all_plots():
+        """Get ROC curve and learning curve data for all models"""
+        all_plots = {}
+        for model_name in predictor.model_names:
+            try:
+                actor = ray.get_actor(model_name)
+                plot_data = ray.get(actor.generate_plot_data.remote())
+                all_plots[model_name] = plot_data
+            except Exception as e:
+                all_plots[model_name] = {'error': str(e)}
+        
+        return {'all_plots': all_plots}
+
     @app.exception_handler(Exception)
     async def exception_handler(request: Request, exc: Exception):
         return JSONResponse(

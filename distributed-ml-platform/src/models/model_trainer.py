@@ -131,7 +131,7 @@ def train_multiple_models(models, X_train, y_train, X_test, y_test, model_names=
     
     # Collect results with timeout handling
     trained_models = {}
-    accuracy_dict = {}
+    all_metrics = {}
     
     for ref, model_name, _ in training_refs:
         try:
@@ -144,13 +144,8 @@ def train_multiple_models(models, X_train, y_train, X_test, y_test, model_names=
                 
             trained_models[model_name] = result['model']
             
-            # Extract metrics for comparison
-            metrics = result['metrics']
-            if 'accuracy' in metrics:
-                accuracy_dict[model_name] = metrics['accuracy']
-            elif 'rmse' in metrics:
-                # For regression, use negative RMSE so that higher is better (consistent with accuracy)
-                accuracy_dict[model_name] = -metrics['rmse']
+            # Store complete metrics for each model
+            all_metrics[model_name] = result['metrics']
         except ray.exceptions.GetTimeoutError:
             logger.error(f"Training {model_name} timed out after {timeout} seconds")
         except Exception as e:
@@ -161,7 +156,7 @@ def train_multiple_models(models, X_train, y_train, X_test, y_test, model_names=
     else:
         logger.info(f"Successfully trained {len(trained_models)} models")
         
-    return trained_models, accuracy_dict
+    return trained_models, all_metrics
 
 # Ray actor for distributed, in-memory model storage and prediction
 @ray.remote(max_restarts=-1, max_task_retries=-1)
@@ -177,6 +172,7 @@ class ModelActor:
         self.model = model
         self.model_name = model_name
         self.metrics = {}
+        self.training_data = {}  # Store training data for plotting
     
     def predict(self, features):
         """
@@ -225,3 +221,142 @@ class ModelActor:
             metrics: A dictionary containing the metrics to be set for the model.
         """
         self.metrics = metrics
+
+    def set_training_data(self, X_train, y_train, X_test, y_test):
+        """
+        Store training data for generating plots.
+        
+        Args:
+            X_train, y_train, X_test, y_test: Training and test datasets
+        """
+        self.training_data = {
+            'X_train': X_train,
+            'y_train': y_train,
+            'X_test': X_test,
+            'y_test': y_test
+        }
+
+    def generate_roc_curve(self):
+        """
+        Generate ROC curve data for classification models.
+        
+        Returns:
+            Dictionary with ROC curve data or error message
+        """
+        try:
+            if not self.training_data:
+                return {"error": "No training data available for ROC curve generation"}
+            
+            import numpy as np
+            from sklearn.metrics import roc_curve, auc
+            from sklearn.preprocessing import label_binarize
+            
+            X_test = self.training_data['X_test']
+            y_test = self.training_data['y_test']
+            
+            # Check if it's a classification task
+            n_classes = len(np.unique(y_test))
+            if n_classes < 2:
+                return {"error": "ROC curve requires at least 2 classes"}
+            
+            # Get prediction probabilities
+            if hasattr(self.model, 'predict_proba'):
+                y_proba = self.model.predict_proba(X_test)
+            elif hasattr(self.model, 'decision_function'):
+                y_scores = self.model.decision_function(X_test)
+                if n_classes == 2:
+                    # Binary classification
+                    y_proba = np.column_stack([1 - y_scores, y_scores])
+                else:
+                    return {"error": "Multi-class ROC with decision_function not supported"}
+            else:
+                return {"error": "Model does not support probability prediction"}
+            
+            roc_data = {}
+            
+            if n_classes == 2:
+                # Binary classification
+                fpr, tpr, _ = roc_curve(y_test, y_proba[:, 1])
+                roc_auc = auc(fpr, tpr)
+                roc_data = {
+                    'fpr': fpr.tolist(),
+                    'tpr': tpr.tolist(),
+                    'auc': roc_auc,
+                    'type': 'binary'
+                }
+            else:
+                # Multi-class classification
+                y_test_bin = label_binarize(y_test, classes=np.unique(y_test))
+                roc_data = {'type': 'multiclass', 'classes': {}}
+                
+                for i in range(n_classes):
+                    fpr, tpr, _ = roc_curve(y_test_bin[:, i], y_proba[:, i])
+                    roc_auc = auc(fpr, tpr)
+                    roc_data['classes'][f'class_{i}'] = {
+                        'fpr': fpr.tolist(),
+                        'tpr': tpr.tolist(),
+                        'auc': roc_auc
+                    }
+            
+            return roc_data
+            
+        except Exception as e:
+            return {"error": f"Failed to generate ROC curve: {str(e)}"}
+
+    def generate_learning_curve(self):
+        """
+        Generate learning curve data.
+        
+        Returns:
+            Dictionary with learning curve data or error message
+        """
+        try:
+            if not self.training_data:
+                return {"error": "No training data available for learning curve generation"}
+            
+            from sklearn.model_selection import learning_curve
+            import numpy as np
+            
+            X_train = self.training_data['X_train']
+            y_train = self.training_data['y_train']
+            
+            # Generate learning curve
+            train_sizes = np.linspace(0.1, 1.0, 10)
+            train_sizes_abs, train_scores, val_scores = learning_curve(
+                self.model, X_train, y_train, 
+                train_sizes=train_sizes,
+                cv=3,  # 3-fold cross-validation
+                n_jobs=1,
+                random_state=42
+            )
+            
+            # Calculate mean and std
+            train_scores_mean = np.mean(train_scores, axis=1)
+            train_scores_std = np.std(train_scores, axis=1)
+            val_scores_mean = np.mean(val_scores, axis=1)
+            val_scores_std = np.std(val_scores, axis=1)
+            
+            return {
+                'train_sizes': train_sizes_abs.tolist(),
+                'train_scores_mean': train_scores_mean.tolist(),
+                'train_scores_std': train_scores_std.tolist(),
+                'val_scores_mean': val_scores_mean.tolist(),
+                'val_scores_std': val_scores_std.tolist()
+            }
+            
+        except Exception as e:
+            return {"error": f"Failed to generate learning curve: {str(e)}"}
+
+    def generate_plot_data(self):
+        """
+        Generate both ROC curve and learning curve data.
+        
+        Returns:
+            Dictionary with both plot types
+        """
+        return {
+            'roc_curve': self.generate_roc_curve(),
+            'learning_curve': self.generate_learning_curve(),
+            'model_name': self.model_name,
+            'metrics': self.metrics
+        }

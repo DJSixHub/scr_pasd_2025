@@ -218,6 +218,8 @@ def main():
             for model_name, model in dataset_models.items():
                 actor = ModelActor.options(name=model_name, lifetime="detached").remote(model, model_name)
                 actor.set_metrics.remote(dataset_metrics.get(model_name, {}))
+                # Store training data for plot generation
+                actor.set_training_data.remote(X_train, y_train, X_test, y_test)
                 model_actors[model_name] = actor
             trained_models.update(dataset_models)
             training_metrics.update(dataset_metrics)
