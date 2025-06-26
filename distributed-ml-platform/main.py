@@ -47,6 +47,9 @@ def parse_args():
     # Ray connection settings
     parser.add_argument('--address', type=str, help='Ray cluster address (e.g., auto, localhost:6379)', default=None)
     parser.add_argument('--local', action='store_true', help='Force Ray to run in local mode')
+    parser.add_argument('--min-nodes', type=int, help='Minimum number of Ray nodes required', default=1)
+    parser.add_argument('--failure-tolerant', action='store_true', help='Enable failure tolerance features')
+    parser.add_argument('--ray-redundancy', type=int, help='Redundancy level for data and models (1=no redundancy)', default=1)
     
     # Operation mode
     parser.add_argument('--mode', type=str, choices=['train', 'serve', 'all'], 
@@ -54,15 +57,20 @@ def parse_args():
     
     # Training settings
     parser.add_argument('--data', type=str, nargs='+', help='Paths to datasets for training')
+    parser.add_argument('--data-dirs', type=str, nargs='+', help='Additional directories to search for redundant data')
     parser.add_argument('--target', type=str, help='Target column name for training')
     parser.add_argument('--test-size', type=float, help='Test size for train/test split', default=0.2)
     parser.add_argument('--scale', action='store_true', help='Scale features before training')
     parser.add_argument('--output-dir', type=str, help='Directory to save models and plots', default='output')
+    parser.add_argument('--checkpoint-dir', type=str, help='Directory for model checkpoints during training')
+    parser.add_argument('--verify-data', action='store_true', help='Verify data integrity before loading')
     
     # Serving settings
     parser.add_argument('--model-dir', type=str, help='Directory containing trained models', default='output/models')
+    parser.add_argument('--model-backup-dirs', type=str, nargs='+', help='Backup directories for model redundancy')
     parser.add_argument('--host', type=str, help='Host to bind the API server to', default='0.0.0.0')
     parser.add_argument('--port', type=int, help='Port to bind the API server to', default=8000)
+    parser.add_argument('--verify-models', action='store_true', help='Verify model integrity before loading')
     
     # Visualization settings
     parser.add_argument('--no-plots', action='store_true', help='Disable plot generation')
@@ -71,33 +79,85 @@ def parse_args():
     return parser.parse_args()
 
 def main():
-    """Main entry point for the distributed ML platform"""
+    """Main execution function"""
     args = parse_args()
     
-    # Create output directories
-    os.makedirs(args.output_dir, exist_ok=True)
-    os.makedirs(os.path.join(args.output_dir, 'models'), exist_ok=True)
-    os.makedirs(os.path.join(args.output_dir, 'plots'), exist_ok=True)
-    
     # Initialize Ray
-    initialize_ray(address=args.address, local=args.local)
-    logger.info(f"Ray cluster status: {get_cluster_status()}")
+    logger.info("Initializing Ray...")
+    if args.failure_tolerant:
+        logger.info("Running in failure-tolerant mode")
+        from src.utils.ray_utils import RayFailoverManager, check_cluster_health
+        
+        # Create a failover manager with potential cluster addresses
+        failover_manager = RayFailoverManager(
+            primary_address=args.address,
+            secondary_addresses=["auto", "localhost:6379"]
+        )
+        
+        # Connect with failover support
+        if not failover_manager.connect(max_retries=3):
+            logger.error("Failed to connect to any Ray cluster, exiting")
+            sys.exit(1)
+            
+        # Check cluster health if in distributed mode
+        if not args.local:
+            logger.info("Checking cluster health...")
+            if not check_cluster_health(min_nodes=args.min_nodes):
+                logger.warning(f"Cluster does not meet minimum requirements of {args.min_nodes} nodes")
+                if args.failure_tolerant:
+                    logger.info("Continuing in degraded mode due to failure tolerance setting")
+                else:
+                    logger.error("Exiting due to insufficient cluster resources")
+                    sys.exit(1)
+    else:
+        # Standard Ray initialization
+        if not initialize_ray(args.address, args.local):
+            logger.error("Failed to initialize Ray, exiting")
+            sys.exit(1)
     
+    logger.info("Ray initialized successfully")
+    
+    # Track all trained models and their metrics
     trained_models = {}
     training_metrics = {}
     
-    # Training mode
+    # Training phase
     if args.mode in ['train', 'all']:
+        logger.info("Starting training phase")
+        
         if not args.data:
             logger.error("No datasets provided for training. Use --data to specify dataset paths.")
             sys.exit(1)
             
         logger.info(f"Loading and preprocessing {len(args.data)} datasets")
+        
+        # Build comprehensive search directories for data redundancy
+        data_dirs = []
+        if args.data_dirs:
+            data_dirs.extend(args.data_dirs)
+            
+        if args.failure_tolerant:
+            # Add potential data redundancy locations
+            data_dirs.extend([
+                '/app/data',
+                '/tmp/ray_data/data',
+                './data_backup',
+                '/app/data_backup'
+            ])
+            
+        # Create checkpoint directory if specified
+        checkpoint_dir = args.checkpoint_dir
+        if args.failure_tolerant and not checkpoint_dir:
+            checkpoint_dir = os.path.join(args.output_dir, 'checkpoints')
+            os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        # Load and preprocess data with redundancy support
         processed_datasets = load_and_preprocess_data(
             args.data,
             target_col=args.target,
             test_size=args.test_size,
-            scale=args.scale
+            scale=args.scale,
+            data_dirs=data_dirs if args.ray_redundancy > 1 else []
         )
         
         if not processed_datasets:
@@ -174,14 +234,20 @@ def main():
                     f"SGDRegressor_ds{i+1}"
                 ]
             
-            # Train models
+            # Train models with fault tolerance
             dataset_models, dataset_metrics = train_multiple_models(
-                models, X_train, y_train, X_test, y_test, model_names
+                models, X_train, y_train, X_test, y_test, model_names,
+                checkpoint_dir=checkpoint_dir if args.failure_tolerant else None,
+                max_retries=3 if args.failure_tolerant else 1,
+                timeout=600
             )
             
-            # Save models
+            # Save models with redundancy if requested
             model_dir = os.path.join(args.output_dir, 'models')
-            save_models(dataset_models, model_dir)
+            if args.ray_redundancy > 1:
+                save_models(dataset_models, model_dir, replicas=args.ray_redundancy)
+            else:
+                save_models(dataset_models, model_dir)
             
             # Update global dictionaries
             trained_models.update(dataset_models)
@@ -220,31 +286,60 @@ def main():
                         show=args.show_plots
                     )
     
-    # Serving mode
+    # Serving phase
     if args.mode in ['serve', 'all']:
-        if not trained_models and args.mode == 'all':
-            # Load models from disk for serving
-            logger.info(f"Loading models from {args.model_dir} for serving")
-            model_files = [os.path.join(args.model_dir, f) for f in os.listdir(args.model_dir) 
-                          if f.endswith('.joblib')]
-            trained_models = load_models(model_files)
+        logger.info("Starting serving phase")
         
-        if trained_models:
-            logger.info(f"Starting model serving API with {len(trained_models)} models")
-            api = create_api(trained_models, host=args.host, port=args.port)
+        if not trained_models:
+            logger.info("No models trained in this session, loading from disk")
             
-            try:
-                # Keep the main thread alive
-                while True:
-                    time.sleep(10)
-                    # We don't auto-generate inference plots in production
-            except KeyboardInterrupt:
-                logger.info("Shutting down API...")
-                api.stop()
-        else:
-            logger.error("No models available for serving.")
-            sys.exit(1)
-    
+            # Build search paths for models with redundancy support
+            model_dirs = [args.model_dir]
+            
+            if args.model_backup_dirs:
+                model_dirs.extend(args.model_backup_dirs)
+            
+            if args.failure_tolerant and args.ray_redundancy > 1:
+                # Add potential model redundancy locations
+                for i in range(1, args.ray_redundancy):
+                    backup_dir = f"{args.model_dir}_replica_{i}"
+                    if backup_dir not in model_dirs:
+                        model_dirs.append(backup_dir)
+                
+                # Add additional potential locations
+                model_dirs.extend([
+                    '/app/output/models', 
+                    '/app/output_backup/models'
+                ])
+            
+            # Gather all potential model files from all directories
+            model_files = []
+            for model_dir in model_dirs:
+                if os.path.exists(model_dir):
+                    for file in os.listdir(model_dir):
+                        if file.endswith('.joblib'):
+                            model_files.append(os.path.join(model_dir, file))
+            
+            if not model_files:
+                logger.error("No models found for serving")
+                sys.exit(1)
+            
+            # Load models with redundancy support
+            if args.failure_tolerant:
+                trained_models = load_models(model_files, verify_integrity=args.verify_models)
+            else:
+                trained_models = load_models(model_files)
+                
+            if not trained_models:
+                logger.error("Failed to load any models for serving")
+                sys.exit(1)
+            
+            logger.info(f"Loaded {len(trained_models)} models for serving")
+        
+        # Create and start the API server
+        logger.info(f"Starting API server on {args.host}:{args.port}")
+        create_api(trained_models, host=args.host, port=args.port)
+
     # Shutdown Ray
     ray.shutdown()
     logger.info("Shut down Ray")

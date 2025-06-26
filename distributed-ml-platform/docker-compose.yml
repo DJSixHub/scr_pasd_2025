@@ -12,12 +12,14 @@ services:
     command: >
       bash -c "ray start --head --port=6379 --dashboard-host=0.0.0.0 --dashboard-port=8265 --block &
               sleep 5 &&
-              python main.py --mode=all --data=data/iris.csv data/wine.csv data/breast_cancer.csv data/digits.csv --target=target --output-dir=/app/output --host=0.0.0.0 --port=8000"
+              python main.py --mode=all --data=data/iris.csv data/wine.csv data/breast_cancer.csv data/digits.csv --target=target --output-dir=/app/output --host=0.0.0.0 --port=8000 --ray-redundancy=2 --failure-tolerant"
     volumes:
       - ./output:/app/output
       - ./data:/app/data
+      - ray_data:/tmp/ray_data  # Shared data for Ray
     environment:
       - RAY_DISABLE_DOCKER_CPU_WARNING=1
+      - PYTHONUNBUFFERED=1
     healthcheck:
       test: ["CMD", "ray", "status"]
       interval: 10s
@@ -28,14 +30,20 @@ services:
         limits:
           cpus: '2.0'
           memory: 2G
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
 
-  # Ray worker nodes
+  # Ray worker nodes for distributed processing
   ray-worker-1:
     build: .
     depends_on:
       - ray-head
     command: >
       bash -c "sleep 10 && ray start --address=ray-head:6379 --block"
+    volumes:
+      - ./data:/app/data:ro  # Read-only data access
+      - ray_data:/tmp/ray_data  # Shared data for Ray
     environment:
       - RAY_DISABLE_DOCKER_CPU_WARNING=1
     deploy:
@@ -43,15 +51,19 @@ services:
         limits:
           cpus: '1.0'
           memory: 1G
-    volumes:
-      - ./data:/app/data
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
 
   ray-worker-2:
     build: .
     depends_on:
       - ray-head
     command: >
-      bash -c "sleep 15 && ray start --address=ray-head:6379 --block" 
+      bash -c "sleep 12 && ray start --address=ray-head:6379 --block"
+    volumes:
+      - ./data:/app/data:ro  # Read-only data access
+      - ray_data:/tmp/ray_data  # Shared data for Ray
     environment:
       - RAY_DISABLE_DOCKER_CPU_WARNING=1
     deploy:
@@ -59,5 +71,32 @@ services:
         limits:
           cpus: '1.0'
           memory: 1G
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+
+  # Data redundancy service
+  data-sync:
+    build: .
+    depends_on:
+      - ray-head
+    command: >
+      bash -c "
+      mkdir -p /app/data_backup && 
+      while true; do 
+        cp -r /app/data/* /app/data_backup/ &&
+        cp -r /app/output/* /app/output_backup/ &&
+        echo 'Data sync completed' &&
+        sleep 300; 
+      done"
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data:ro
+      - ./data_backup:/app/data_backup
+      - ./output:/app/output:ro
+      - ./output_backup:/app/output_backup
+    deploy:
+      restart_policy:
+        condition: any
+
+volumes:
+  ray_data:  # Shared volume for Ray data
