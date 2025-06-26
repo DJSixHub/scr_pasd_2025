@@ -2,6 +2,8 @@
 
 A distributed machine learning platform using Ray, Docker, and Scikit-Learn for parallel training and serving of machine learning models.
 
+GitHub Repository: [https://github.com/DJSixHub/scr_pasd_2025](https://github.com/DJSixHub/scr_pasd_2025)
+
 ## Project Structure
 
 ```
