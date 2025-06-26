@@ -2,6 +2,9 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
+# Install debugging tools and netcat-openbsd for service wait loops
+RUN apt-get update && apt-get install -y curl procps net-tools netcat-openbsd && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies first (for better caching)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

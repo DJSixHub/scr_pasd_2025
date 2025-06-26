@@ -1,27 +1,21 @@
 """
-Model training utilities for distributed machine learning with fault tolerance
+Model training utilities for distributed machine learning with fault tolerance (Ray-native, no file I/O)
 """
-import os
 import ray
 import logging
 import numpy as np
 import pandas as pd
-import tempfile
 from time import time
-from sklearn.base import BaseEstimator
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, mean_squared_error
-import joblib
 import random
-import hashlib
 import socket
-from functools import partial
 
 logger = logging.getLogger(__name__)
 
-@ray.remote(max_retries=3)  # Add fault tolerance with retries
-def train_model(model, X_train, y_train, X_test, y_test, model_name=None, checkpoint_dir=None):
+@ray.remote(max_retries=3)
+def train_model(model, X_train, y_train, X_test, y_test, model_name=None):
     """
-    Train a single model in a distributed manner using Ray with checkpointing
+    Train a single model in a distributed manner using Ray
     
     Args:
         model: Scikit-learn model to train
@@ -30,7 +24,6 @@ def train_model(model, X_train, y_train, X_test, y_test, model_name=None, checkp
         X_test: Test features
         y_test: Test target
         model_name: Name of the model for logging
-        checkpoint_dir: Directory to save checkpoints for fault tolerance
         
     Returns:
         dict: Training results including trained model and metrics
@@ -38,15 +31,10 @@ def train_model(model, X_train, y_train, X_test, y_test, model_name=None, checkp
     if model_name is None:
         model_name = model.__class__.__name__
     
-    # Create a unique ID for this training job for checkpointing
+    # Create a unique ID for this training job
     job_id = f"{model_name}_{socket.gethostname()}_{random.randint(1000, 9999)}"
     
     logger.info(f"Training model: {model_name} (job_id: {job_id})")
-    
-    checkpoint_path = None
-    if checkpoint_dir:
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        checkpoint_path = os.path.join(checkpoint_dir, f"{job_id}.pkl")
     
     start_time = time()
     
@@ -54,14 +42,6 @@ def train_model(model, X_train, y_train, X_test, y_test, model_name=None, checkp
         # Train the model
         model.fit(X_train, y_train)
         training_time = time() - start_time
-        
-        # Save checkpoint if enabled
-        if checkpoint_path:
-            try:
-                joblib.dump(model, checkpoint_path)
-                logger.info(f"Model checkpoint saved to {checkpoint_path}")
-            except Exception as e:
-                logger.warning(f"Failed to save checkpoint: {e}")
         
         # Make predictions
         y_pred = model.predict(X_test)
@@ -97,7 +77,7 @@ def train_model(model, X_train, y_train, X_test, y_test, model_name=None, checkp
             'error': str(e)
         }
 
-def train_multiple_models(models, X_train, y_train, X_test, y_test, model_names=None, checkpoint_dir=None, max_retries=3, timeout=600):
+def train_multiple_models(models, X_train, y_train, X_test, y_test, model_names=None, max_retries=3, timeout=600):
     """
     Train multiple models in parallel using Ray with fault tolerance
     
@@ -108,9 +88,6 @@ def train_multiple_models(models, X_train, y_train, X_test, y_test, model_names=
         X_test: Test features
         y_test: Test target
         model_names (list, optional): Names of the models
-        checkpoint_dir (str, optional): Directory to save checkpoints
-        max_retries (int): Maximum number of retries for failed training
-        timeout (int): Timeout in seconds for each training task
         
     Returns:
         tuple: (trained_models, accuracy_dict)
@@ -130,13 +107,6 @@ def train_multiple_models(models, X_train, y_train, X_test, y_test, model_names=
     X_test_id = ray.put(X_test)
     y_test_id = ray.put(y_test)
     
-    # Create temporary checkpoint directory if not provided
-    temp_checkpoint_dir = None
-    if checkpoint_dir is None:
-        temp_checkpoint_dir = tempfile.mkdtemp(prefix="ray_model_checkpoints_")
-        checkpoint_dir = temp_checkpoint_dir
-        logger.info(f"Created temporary checkpoint directory: {checkpoint_dir}")
-    
     # Start distributed training with fault tolerance
     training_refs = []
     for i, (model, model_name) in enumerate(zip(models, model_names)):
@@ -148,7 +118,7 @@ def train_multiple_models(models, X_train, y_train, X_test, y_test, model_names=
             try:
                 ref = train_model.remote(
                     model_id, X_train_id, y_train_id, X_test_id, y_test_id, 
-                    model_name=model_name, checkpoint_dir=checkpoint_dir
+                    model_name=model_name
                 )
                 training_refs.append((ref, model_name, attempt))
                 break
@@ -186,14 +156,6 @@ def train_multiple_models(models, X_train, y_train, X_test, y_test, model_names=
         except Exception as e:
             logger.error(f"Error getting result for {model_name}: {e}")
     
-    # Clean up temporary directory if created
-    if temp_checkpoint_dir:
-        try:
-            import shutil
-            shutil.rmtree(temp_checkpoint_dir)
-        except Exception as e:
-            logger.warning(f"Failed to clean up temporary checkpoint directory: {e}")
-    
     if not trained_models:
         logger.error("All model training failed")
     else:
@@ -201,231 +163,59 @@ def train_multiple_models(models, X_train, y_train, X_test, y_test, model_names=
         
     return trained_models, accuracy_dict
 
-@ray.remote
-def save_model_to_path(model, model_name, output_path):
-    """
-    Save a single model to a specific path in a distributed manner.
-    
-    Args:
-        model: The trained model to save
-        model_name: Name of the model
-        output_path: Full path where the model should be saved
+# Ray actor for distributed, in-memory model storage and prediction
+@ray.remote(max_restarts=-1, max_task_retries=-1)
+class ModelActor:
+    def __init__(self, model, model_name):
+        """
+        Initialize the ModelActor with a scikit-learn model and its name.
         
-    Returns:
-        str or None: Path to the saved model or None if saving failed
-    """
-    try:
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        joblib.dump(model, output_path)
-        return output_path
-    except Exception as e:
-        logger.error(f"Error saving model {model_name} to {output_path}: {e}")
-        return None
-
-def save_models(models, output_dir="models", replicas=2):
-    """
-    Save trained models to disk with redundancy
+        Args:
+            model: The scikit-learn model to be used for predictions.
+            model_name: A string representing the name of the model.
+        """
+        self.model = model
+        self.model_name = model_name
+        self.metrics = {}
     
-    Args:
-        models (dict): Dictionary mapping model names to trained models
-        output_dir (str): Primary directory to save models in
-        replicas (int): Number of copies to save for redundancy
+    def predict(self, features):
+        """
+        Make predictions using the stored model.
         
-    Returns:
-        dict: Dictionary mapping model names to lists of saved file paths
-    """
-    if not models:
-        logger.warning("No models to save")
-        return {}
-        
-    if not ray.is_initialized():
-        logger.warning("Ray is not initialized, initializing now")
-        ray.init()
-    
-    # Create multiple directories for redundancy
-    storage_paths = [output_dir]
-    
-    # Add replica directories if requested
-    if replicas > 1:
-        for i in range(1, replicas):
-            replica_dir = f"{output_dir}_replica_{i}"
-            storage_paths.append(replica_dir)
-    
-    # Ensure all directories exist
-    for path in storage_paths:
-        os.makedirs(path, exist_ok=True)
-        
-    # Dictionary to track save operations
-    save_tasks = {}
-    saved_paths = {}
-    
-    # Distribute saving across Ray workers
-    for model_name, model in models.items():
-        save_tasks[model_name] = []
-        saved_paths[model_name] = []
-        
-        # Generate model hash for integrity verification
-        model_hash = None
-        try:
-            import pickle
-            model_bytes = pickle.dumps(model)
-            model_hash = hashlib.md5(model_bytes).hexdigest()
-        except:
-            pass
+        Args:
+            features: Input features for prediction, as a list of dictionaries or a DataFrame.
             
-        # Save to each storage location
-        for path in storage_paths:
-            file_path = os.path.join(path, f"{model_name}.joblib")
-            
-            # Add metadata for verification
-            if model_hash:
-                metadata_path = os.path.join(path, f"{model_name}.meta")
-                with open(metadata_path, 'w') as f:
-                    f.write(f"model_hash: {model_hash}\n")
-                    f.write(f"timestamp: {time()}\n")
-            
-            # Submit save task to Ray
-            save_task = save_model_to_path.remote(model, model_name, file_path)
-            save_tasks[model_name].append(save_task)
+        Returns:
+            List of predictions.
+        """
+        import pandas as pd
+        X = pd.DataFrame(features)
+        preds = self.model.predict(X)
+        return preds.tolist()
     
-    # Wait for all save operations to complete
-    for model_name, tasks in save_tasks.items():
-        try:
-            paths = ray.get(tasks)
-            saved_paths[model_name] = [p for p in paths if p]
-            
-            if saved_paths[model_name]:
-                logger.info(f"Saved model {model_name} to {len(saved_paths[model_name])} locations")
-            else:
-                logger.error(f"Failed to save model {model_name} to any location")
-        except Exception as e:
-            logger.error(f"Error saving model {model_name}: {e}")
-    
-    return saved_paths
-
-@ray.remote
-def load_model_from_path(path):
-    """
-    Load a single model from a specific path in a distributed manner.
-    
-    Args:
-        path: Path to the model file
+    def get_name(self):
+        """
+        Get the name of the model.
         
-    Returns:
-        tuple: (model_name, model) or (model_name, None) if loading failed
-    """
-    try:
-        model_name = os.path.basename(path).split('.')[0]
-        model = joblib.load(path)
-        return model_name, model
-    except Exception as e:
-        logger.error(f"Error loading model from {path}: {e}")
-        return os.path.basename(path).split('.')[0], None
-
-def verify_model_integrity(model_path):
-    """
-    Verify the integrity of a saved model using its metadata file
+        Returns:
+            The model name as a string.
+        """
+        return self.model_name
     
-    Args:
-        model_path: Path to the model file
+    def get_metrics(self):
+        """
+        Get the metrics of the model.
         
-    Returns:
-        bool: True if the model passes integrity check
-    """
-    try:
-        metadata_path = model_path.replace('.joblib', '.meta')
-        if not os.path.exists(metadata_path):
-            return True  # No metadata to verify against
-            
-        # Read stored hash
-        stored_hash = None
-        with open(metadata_path, 'r') as f:
-            for line in f:
-                if line.startswith('model_hash:'):
-                    stored_hash = line.split(':')[1].strip()
-                    break
-                    
-        if not stored_hash:
-            return True  # No hash to verify against
-            
-        # Calculate current hash
-        import pickle
-        model = joblib.load(model_path)
-        model_bytes = pickle.dumps(model)
-        current_hash = hashlib.md5(model_bytes).hexdigest()
+        Returns:
+            A dictionary containing the model's metrics.
+        """
+        return self.metrics
+    
+    def set_metrics(self, metrics):
+        """
+        Set the metrics for the model.
         
-        return current_hash == stored_hash
-    except Exception as e:
-        logger.error(f"Error verifying model integrity for {model_path}: {e}")
-        return False
-
-def load_models(model_paths, verify_integrity=True):
-    """
-    Load models from disk in a fault-tolerant way
-    
-    Args:
-        model_paths (dict or list): Dictionary mapping model names to lists of file paths,
-                                   or a simple list of paths
-        verify_integrity (bool): Whether to verify model integrity
-        
-    Returns:
-        dict: Dictionary mapping model names to loaded models
-    """
-    if not model_paths:
-        logger.warning("No model paths provided")
-        return {}
-        
-    if not ray.is_initialized():
-        logger.warning("Ray is not initialized, initializing now")
-        ray.init()
-    
-    # Convert list to dictionary format if needed
-    if isinstance(model_paths, list):
-        paths_dict = {}
-        for path in model_paths:
-            model_name = os.path.basename(path).split('.')[0]
-            if model_name not in paths_dict:
-                paths_dict[model_name] = []
-            paths_dict[model_name].append(path)
-        model_paths = paths_dict
-    
-    # Try to load models with fault tolerance
-    loaded_models = {}
-    load_tasks = {}
-    
-    # For each model, try loading from multiple locations if available
-    for model_name, paths in model_paths.items():
-        load_tasks[model_name] = []
-        
-        # Check integrity first if requested
-        valid_paths = []
-        for path in paths:
-            if os.path.exists(path):
-                if not verify_integrity or verify_model_integrity(path):
-                    valid_paths.append(path)
-                else:
-                    logger.warning(f"Model {path} failed integrity check, skipping")
-            else:
-                logger.warning(f"Model path {path} doesn't exist, skipping")
-                
-        # Try loading each valid copy
-        for path in valid_paths:
-            load_tasks[model_name].append(load_model_from_path.remote(path))
-                
-        if not load_tasks[model_name]:
-            logger.error(f"No valid paths found for model {model_name}")
-    
-    # Collect results
-    for model_name, tasks in load_tasks.items():
-        for task in tasks:
-            try:
-                name, model = ray.get(task, timeout=30)
-                if model is not None:
-                    loaded_models[model_name] = model
-                    logger.info(f"Successfully loaded model {model_name}")
-                    break  # Stop after first successful load
-            except Exception as e:
-                logger.warning(f"Failed to load a copy of {model_name}: {e}")
-    
-    logger.info(f"Loaded {len(loaded_models)} models successfully")
-    return loaded_models
+        Args:
+            metrics: A dictionary containing the metrics to be set for the model.
+        """
+        self.metrics = metrics

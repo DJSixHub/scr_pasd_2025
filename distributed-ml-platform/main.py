@@ -26,7 +26,7 @@ from ray import serve
 
 from src.utils.ray_utils import initialize_ray, get_cluster_status
 from src.data.data_loader import load_and_preprocess_data
-from src.models.model_trainer import train_multiple_models, save_models, load_models
+from src.models.model_trainer import train_multiple_models, ModelActor
 from src.serving.api import create_app
 from src.visualization.visualizer import plot_training_metrics, plot_model_comparison, plot_inference_metrics
 
@@ -121,6 +121,7 @@ def main():
     
     # Track all trained models and their metrics
     trained_models = {}
+    model_actors = {}
     training_metrics = {}
     
     # Training phase
@@ -209,19 +210,15 @@ def main():
             # Train models with fault tolerance
             dataset_models, dataset_metrics = train_multiple_models(
                 models, X_train, y_train, X_test, y_test, model_names,
-                checkpoint_dir=checkpoint_dir if args.failure_tolerant else None,
                 max_retries=3 if args.failure_tolerant else 1,
                 timeout=600
             )
             
-            # Save models with redundancy if requested
-            model_dir = os.path.join(args.output_dir, 'models')
-            if args.ray_redundancy > 1:
-                save_models(dataset_models, model_dir, replicas=args.ray_redundancy)
-            else:
-                save_models(dataset_models, model_dir)
-            
-            # Update global dictionaries
+            # Deploy each trained model as a Ray actor
+            for model_name, model in dataset_models.items():
+                actor = ModelActor.options(name=model_name, lifetime="detached").remote(model, model_name)
+                actor.set_metrics.remote(dataset_metrics.get(model_name, {}))
+                model_actors[model_name] = actor
             trained_models.update(dataset_models)
             training_metrics.update(dataset_metrics)
             
@@ -265,58 +262,25 @@ def main():
     # Serving phase
     if args.mode in ['serve', 'all']:
         logger.info("Starting serving phase")
-        if not trained_models:
-            logger.info("No models trained in this session, loading from disk")
-            
-            # Build search paths for models with redundancy support
-            model_dirs = [args.model_dir]
-            
-            if args.model_backup_dirs:
-                model_dirs.extend(args.model_backup_dirs)
-            
-            if args.failure_tolerant and args.ray_redundancy > 1:
-                # Add potential model redundancy locations
-                for i in range(1, args.ray_redundancy):
-                    backup_dir = f"{args.model_dir}_replica_{i}"
-                    if backup_dir not in model_dirs:
-                        model_dirs.append(backup_dir)
-                
-                # Add additional potential locations
-                model_dirs.extend([
-                    '/app/output/models', 
-                    '/app/output_backup/models'
-                ])
-            
-            # Gather all potential model files from all directories
-            model_files = []
-            for model_dir in model_dirs:
-                if os.path.exists(model_dir):
-                    for file in os.listdir(model_dir):
-                        if file.endswith('.joblib'):
-                            model_files.append(os.path.join(model_dir, file))
-            
-            if not model_files:
-                logger.error("No models found for serving")
-                sys.exit(1)
-            
-            # Load models with redundancy support
-            if args.failure_tolerant:
-                trained_models = load_models(model_files, verify_integrity=args.verify_models)
-            else:
-                trained_models = load_models(model_files)
-                
-            if not trained_models:
-                logger.error("Failed to load any models for serving")
-                sys.exit(1)
-            
-            logger.info(f"Loaded {len(trained_models)} models for serving")
-        
-        # Ray Serve deployment
-        logger.info(f"Starting Ray Serve API deployment on {args.host}:{args.port}")
+        # Discover all Ray model actors by name
+        import ray
         if not ray.is_initialized():
             ray.init()
+        # List all named actors (models)
+        model_names = []
+        try:
+            model_names = [a for a in ray.util.list_named_actors() if not a.startswith("__")]
+        except Exception:
+            pass
+        if not model_names:
+            logger.error("No distributed model actors found for serving")
+            sys.exit(1)
+        logger.info(f"Found {len(model_names)} distributed model actors for serving: {model_names}")
+        # Pass only model names to the API, which will use Ray to route requests
+        from src.serving.api import create_app
+        app, _ = create_app(model_names)
+        from ray import serve
         serve.start(detached=True, host=args.host, port=args.port)
-        app, predictor = create_app(trained_models)
         @serve.deployment(name="api")
         @serve.ingress(app)
         class FastAPIDeployment:
@@ -324,7 +288,6 @@ def main():
                 pass
         serve.run(FastAPIDeployment.bind(), route_prefix="/")
         logger.info(f"API server deployed and running at http://{args.host}:{args.port}")
-        # Block to keep the process alive if needed
         try:
             while True:
                 time.sleep(3600)
@@ -333,8 +296,6 @@ def main():
             serve.shutdown()
             logger.info("API server shut down")
             sys.exit(0)
-
-    # Shutdown Ray
     ray.shutdown()
     logger.info("Shut down Ray")
     

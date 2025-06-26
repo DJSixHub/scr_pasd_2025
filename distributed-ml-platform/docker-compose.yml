@@ -1,5 +1,5 @@
 services:
-  # Ray head node (handles both training and serving)
+  # Ray head node (serving only, persistent)
   ray-head:
     build: .
     ports:
@@ -10,12 +10,12 @@ services:
     command: >
       bash -c "ray start --head --port=6379 --dashboard-host=0.0.0.0 --dashboard-port=8265 --block &
               sleep 5 &&
-              python main.py --mode=all --data /app/data/iris.csv --data /app/data/wine.csv --data /app/data/breast_cancer.csv --target=target --output-dir=/app/output --host=0.0.0.0 --port=8000 --ray-redundancy=2 --failure-tolerant &&
-              echo 'Keeping container alive to serve API requests...' &&
+              python main.py --mode=serve --host=0.0.0.0 --port=8000 --output-dir=/app/output --address=ray-head:6379 &&
               tail -f /dev/null"
     environment:
       - RAY_DISABLE_DOCKER_CPU_WARNING=1
       - PYTHONUNBUFFERED=1
+      - RAY_ADDRESS=ray-head:6379
     healthcheck:
       test: ["CMD", "ray", "status"]
       interval: 10s
@@ -29,6 +29,7 @@ services:
       restart_policy:
         condition: on-failure
         max_attempts: 3
+    shm_size: '2gb'
 
   # Ray worker nodes for distributed processing
   ray-worker-1:
@@ -39,6 +40,7 @@ services:
       bash -c "sleep 10 && ray start --address=ray-head:6379 --block"
     environment:
       - RAY_DISABLE_DOCKER_CPU_WARNING=1
+      - RAY_ADDRESS=ray-head:6379
     deploy:
       resources:
         limits:
@@ -47,6 +49,7 @@ services:
       restart_policy:
         condition: on-failure
         max_attempts: 3
+    shm_size: '2gb'
 
   ray-worker-2:
     build: .
@@ -56,6 +59,7 @@ services:
       bash -c "sleep 12 && ray start --address=ray-head:6379 --block"
     environment:
       - RAY_DISABLE_DOCKER_CPU_WARNING=1
+      - RAY_ADDRESS=ray-head:6379
     deploy:
       resources:
         limits:
@@ -64,3 +68,20 @@ services:
       restart_policy:
         condition: on-failure
         max_attempts: 3
+    shm_size: '2gb'
+
+  # Training service (runs once, then exits)
+  trainer:
+    build: .
+    depends_on:
+      - ray-head
+    command: >
+      bash -c "for i in {1..30}; do nc -z ray-head 6379 && break; echo 'Waiting for Ray head...'; sleep 2; done; python main.py --mode=train --data /app/data/iris.csv /app/data/wine.csv /app/data/breast_cancer.csv --target=target --output-dir=/app/output --ray-redundancy=2 --failure-tolerant --address=ray-head:6379"
+    environment:
+      - RAY_DISABLE_DOCKER_CPU_WARNING=1
+      - PYTHONUNBUFFERED=1
+      - RAY_ADDRESS=ray-head:6379
+    deploy:
+      restart_policy:
+        condition: none
+    shm_size: '2gb'

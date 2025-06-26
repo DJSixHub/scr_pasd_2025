@@ -3,11 +3,11 @@ Model serving functionality for distributed ML platform using FastAPI (Ray Serve
 """
 import logging
 import time
-import pandas as pd
 from typing import Dict, List, Any
 from pydantic import BaseModel
 from fastapi import FastAPI, Request, HTTPException
 from starlette.responses import JSONResponse
+import ray
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +26,11 @@ class ErrorResponse(BaseModel):
 
 # Model predictor class (no Ray Serve logic here)
 class ModelPredictor:
-    def __init__(self, models):
-        self.models = models
+    def __init__(self, model_names):
+        self.model_names = model_names
         self.request_times = {}
         self.request_counts = {}
-        logger.info(f"ModelPredictor initialized with {len(models)} models")
+        logger.info(f"ModelPredictor initialized with {len(model_names)} distributed models")
     
     def _record_request(self, model_name, latency):
         if model_name not in self.request_times:
@@ -44,34 +44,41 @@ class ModelPredictor:
     def health(self, _=None):
         return {
             'status': 'healthy',
-            'models_loaded': len(self.models),
-            'model_names': list(self.models.keys())
+            'models_loaded': len(self.model_names),
+            'model_names': list(self.model_names)
         }
     
     def list_models(self, _=None):
         return {
-            'models': list(self.models.keys())
+            'models': list(self.model_names)
         }
     
     async def predict(self, request_dict, model_name: str):
+        import pandas as pd
+        import time
         start_time = time.time()
-        if model_name not in self.models:
+        if model_name not in self.model_names:
             raise HTTPException(status_code=404, detail={
                 'error': f'Model {model_name} not found',
-                'available_models': list(self.models.keys())
+                'available_models': list(self.model_names)
             })
         try:
             try:
                 prediction_request = PredictionFeatures(**request_dict)
             except Exception as e:
                 raise HTTPException(status_code=400, detail={'error': f'Invalid request format: {str(e)}'})
-            features = pd.DataFrame(prediction_request.features)
-            result = self.models[model_name].predict(features)
+            features = prediction_request.features
+            # Get the Ray actor by name and call predict
+            try:
+                actor = ray.get_actor(model_name)
+            except Exception:
+                raise HTTPException(status_code=404, detail={'error': f'Model actor {model_name} not found in Ray cluster'})
+            result = await ray.get(actor.predict.remote(features))
             latency = time.time() - start_time
             self._record_request(model_name, latency)
             return {
                 'model': model_name,
-                'predictions': result.tolist(),
+                'predictions': result,
                 'latency_ms': latency * 1000
             }
         except Exception as e:
@@ -88,19 +95,8 @@ class ModelPredictor:
                 for model, times in self.request_times.items()
             }
         }
-    
-    def add_model(self, model_name, model):
-        self.models[model_name] = model
-        logger.info(f"Added model {model_name} to the server")
-    
-    def remove_model(self, model_name):
-        if model_name in self.models:
-            del self.models[model_name]
-            logger.info(f"Removed model {model_name} from the server")
-            return True
-        return False
 
-def create_app(models):
+def create_app(model_names):
     """
     Create a FastAPI app and ModelPredictor instance for Ray Serve deployment.
     Args:
@@ -109,7 +105,7 @@ def create_app(models):
         app (FastAPI): FastAPI app instance
         predictor (ModelPredictor): ModelPredictor instance
     """
-    predictor = ModelPredictor(models)
+    predictor = ModelPredictor(model_names)
     app = FastAPI()
 
     @app.get("/health")
