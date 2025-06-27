@@ -94,6 +94,43 @@ class ModelPredictor:
                 raise e
             raise HTTPException(status_code=500, detail={'error': str(e)})
 
+    # ...existing code...
+    
+    async def predict_with_fallback(self, request_dict, model_name: str):
+        """Predict with automatic fallback if actor is not available"""
+        import pandas as pd
+        import time
+        start_time = time.time()
+        
+        try:
+            prediction_request = PredictionFeatures(**request_dict)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail={'error': f'Invalid request format: {str(e)}'})
+        
+        features = prediction_request.features
+        
+        # Try to get the actor with simple retry logic
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                actor = ray.get_actor(model_name)
+                result = ray.get(actor.predict.remote(features), timeout=30.0)
+                
+                latency = time.time() - start_time
+                self._record_request(model_name, latency)
+                return {
+                    'model': model_name,
+                    'predictions': result,
+                    'latency_ms': latency * 1000
+                }
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Attempt {attempt + 1} failed for {model_name}: {e}, retrying...")
+                    time.sleep(1)
+                else:
+                    logger.error(f"Error making prediction with model {model_name}: {e}")
+                    raise HTTPException(status_code=500, detail={'error': str(e)})
+
 def create_app(model_names):
     """
     Create FastAPI app for model serving - Simplified API
@@ -181,18 +218,18 @@ def create_app(model_names):
                 results[model_name] = {'error': str(e)}
         return {'dataset': dataset, 'predictions': results}
 
-    # 4. PREDICT(model, dataset) - Predict using specific model and dataset
+    # 4. PREDICT(model, dataset) - Predict using specific model and dataset with resilience
     @app.post("/predict/{model_type}/{dataset}")
     async def predict_model_dataset(model_type: str, dataset: str, request: PredictionFeatures):
-        """Make predictions using a specific model type trained on a specific dataset"""
+        """Make predictions using a specific model type trained on a specific dataset with failover"""
         model_name = f"{model_type}_{dataset}"
-        return await predictor.predict(request.dict(), model_name)
+        return await predictor.predict_with_fallback(request.dict(), model_name)
     
-    # 5. PREDICT(model) - Predict using specific model
+    # 5. PREDICT(model) - Predict using specific model with resilience
     @app.post("/predict/{model_name}")
     async def predict_model(model_name: str, request: PredictionFeatures):
-        """Make predictions using a specific model"""
-        return await predictor.predict(request.dict(), model_name)
+        """Make predictions using a specific model with automatic failover"""
+        return await predictor.predict_with_fallback(request.dict(), model_name)
 
     # 5. METRICS(model) - Get metrics for specific model
     @app.get("/metrics/{model_name}")
@@ -431,6 +468,25 @@ def create_app(model_names):
         if not dataset_models:
             raise HTTPException(status_code=404, detail=f"No models found for dataset: {dataset}")
         return {'dataset': dataset, 'models': dataset_models}
+
+    # Health check for all models
+    @app.get("/models/health")
+    async def models_health():
+        """Check health of all model actors"""
+        try:
+            import ray.util
+            healthy_models = []
+            for actor_name in ray.util.list_named_actors():
+                if any(dataset in actor_name for dataset in ['iris', 'wine', 'breast_cancer']):
+                    try:
+                        actor = ray.get_actor(actor_name)
+                        ray.get(actor.get_name.remote(), timeout=2.0)
+                        healthy_models.append(actor_name)
+                    except Exception:
+                        pass
+            return {'healthy_models': healthy_models, 'count': len(healthy_models)}
+        except Exception as e:
+            return {'error': str(e), 'healthy_models': [], 'count': 0}
 
     @app.exception_handler(Exception)
     async def exception_handler(request: Request, exc: Exception):

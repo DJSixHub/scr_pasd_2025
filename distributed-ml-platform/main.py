@@ -233,13 +233,18 @@ def main():
                 timeout=600
             )
             
-            # Deploy each trained model as a Ray actor
+            # Deploy each trained model as a Ray actor with simple resilience
             for model_name, model in dataset_models.items():
-                actor = ModelActor.options(name=model_name, lifetime="detached").remote(model, model_name)
-                actor.set_metrics.remote(dataset_metrics.get(model_name, {}))
-                # Store training data for plot generation
-                actor.set_training_data.remote(X_train, y_train, X_test, y_test)
-                model_actors[model_name] = actor
+                try:
+                    actor = ModelActor.options(name=model_name, lifetime="detached").remote(model, model_name)
+                    actor.set_metrics.remote(dataset_metrics.get(model_name, {}))
+                    # Store training data for plot generation
+                    actor.set_training_data.remote(X_train, y_train, X_test, y_test)
+                    model_actors[model_name] = actor
+                    logger.info(f"Successfully created model actor: {model_name}")
+                except Exception as e:
+                    logger.error(f"Failed to create actor {model_name}: {e}")
+            
             trained_models.update(dataset_models)
             training_metrics.update(dataset_metrics)
             

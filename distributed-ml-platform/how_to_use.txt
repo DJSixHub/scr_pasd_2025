@@ -1,348 +1,103 @@
 ================================================================================
-                        GUÍA DE USO - PLATAFORMA ML DISTRIBUIDA
+                        GUÍA RÁPIDA DE USO - PLATAFORMA ML DISTRIBUIDA
 ================================================================================
 
-DESCRIPCIÓN GENERAL
-===================
-Esta plataforma ML distribuida descubre automáticamente y entrena modelos en 
-TODOS los datasets CSV en el directorio /app/data/. Los modelos se nombran 
-dinámicamente como {TipoModelo}_{dataset} (ej: RandomForest_iris, KNN_wine).
-
-INICIO DEL SISTEMA
-==================
-1. Iniciar todos los contenedores:
-   docker-compose up -d
-
-2. Esperar 30-60 segundos para que termine el entrenamiento
-
-3. Verificar que el sistema esté funcionando:
-   http://localhost:8000/health
-
-GESTIÓN DE WORKERS RAY
-======================
-VERIFICAR ESTADO DEL CLUSTER:
-docker exec distributed-ml-platform-ray-head-1 ray status
-
-TUMBAR UN WORKER ESPECÍFICO:
-docker-compose stop ray-worker-1
-docker-compose stop ray-worker-2
-
-REPONER UN WORKER:
-docker-compose start ray-worker-1  
-docker-compose start ray-worker-2
-
-REINICIAR TODOS LOS WORKERS:
-docker-compose restart ray-worker-1 ray-worker-2
-
-AGREGAR MÁS WORKERS (ESCALAMIENTO):
-docker-compose up -d --scale ray-worker-1=2 ray-worker-2=2
-
-VERIFICAR WORKERS ACTIVOS:
-docker exec distributed-ml-platform-ray-head-1 ray list nodes
-
-MONITOREAR CLUSTER EN TIEMPO REAL:
-# Abrir en navegador:
-http://localhost:8265
-
-LOGS DE WORKERS:
-docker-compose logs ray-worker-1
-docker-compose logs ray-worker-2  
-docker-compose logs -f ray-worker-1  # En tiempo real
-
-TROUBLESHOOTING DE WORKERS:
-# Si un worker no responde:
-docker-compose restart ray-worker-1
-
-# Si el cluster está inestable:
-docker-compose down
+INICIAR SISTEMA
+===============
 docker-compose up -d
 
-# Ver actores distribuidos:
-docker exec distributed-ml-platform-ray-head-1 ray list actors
+DETENER SISTEMA
+===============
+docker-compose down
 
-# Verificar recursos disponibles:
-docker exec distributed-ml-platform-ray-head-1 ray status --address=localhost:6379
+REINICIAR SISTEMA
+=================
+docker-compose restart
 
-ENDPOINTS DISPONIBLES
+docker-compose up --build -d  # reconstruir todo
+
+REINICIAR TODO DESDE CERO (descarga requirements y reconstruye imagen)
+=====================================================================
+docker-compose down
+
+docker-compose build --no-cache  # fuerza descarga de requirements y dependencias
+
+docker-compose up -d
+
+REINICIAR Y RECONSTRUIR (sin descargar requirements de cero)
+===========================================================
+docker-compose down
+
+docker-compose build  # usa cache local para requirements si no han cambiado
+
+docker-compose up -d
+
+MONITOREO Y ESTADO
+==================
+docker exec distributed-ml-platform-ray-head-1 ray status
+http://localhost:8265  # Dashboard web
+
+GESTIÓN DE WORKERS
+==================
+docker-compose stop ray-worker-1
+# ...igual para otros workers
+
+docker-compose start ray-worker-1
+# ...igual para otros workers
+
+docker-compose restart ray-worker-1 ray-worker-2
+
+docker exec distributed-ml-platform-ray-head-1 ray list nodes
+
+docker-compose logs -f api-server  # logs en tiempo real
+
+docker exec distributed-ml-platform-ray-head-1 ray list actors  # ver actores
+
+ENDPOINTS PRINCIPALES (API)
+===========================
+GET  /health                # Estado del sistema
+GET  /datasets              # Listar datasets
+GET  /models                # Listar modelos
+POST /predict/{model_name}  # Predicción con modelo
+POST /predict/all/{dataset} # Predicción con todos los modelos de un dataset
+GET  /metrics/{model_name}  # Métricas de un modelo
+GET  /visualization/{model_name}/roc  # Imagen ROC
+
+EJEMPLOS DE USO (PowerShell)
+============================
+Invoke-RestMethod -Uri 'http://localhost:8000/health'
+Invoke-RestMethod -Uri 'http://localhost:8000/models'
+Invoke-RestMethod -Uri 'http://localhost:8000/predict/RandomForest_iris' -Method POST -Body '{"features": [{"sepal length (cm)": 5.1, "sepal width (cm)": 3.5, "petal length (cm)": 1.4, "petal width (cm)": 0.2}]}' -ContentType 'application/json'
+Invoke-RestMethod -Uri 'http://localhost:8000/metrics/RandomForest_iris'
+
+FORMATO DE PREDICCIÓN
 =====================
-
-1. SALUD DEL SISTEMA
-   GET /health
-   - Verifica si la API está funcionando
-
-2. LISTAR DATASETS
-   GET /datasets
-   - Muestra todos los datasets detectados automáticamente
-
-3. LISTAR MODELOS
-   GET /models
-   - Muestra todos los modelos entrenados
-   GET /models/{dataset}
-   - Muestra modelos específicos para un dataset
-
-4. PREDICCIONES
-   POST /predict/{model_name}
-   - Predicción con modelo específico
-   POST /predict/{model_type}/{dataset}
-   - Predicción con tipo de modelo en dataset específico
-   POST /predict/all
-   - Predicción con todos los modelos
-   POST /predict/all/{dataset}
-   - Predicción con todos los modelos de un dataset
-
-5. MÉTRICAS
-   GET /metrics/{model_name}
-   - Métricas de un modelo específico
-   GET /metrics/all
-   - Métricas de todos los modelos
-
-6. VISUALIZACIONES
-   GET /visualization/all
-   - Dashboard con todos los modelos
-   GET /visualization/{model_name}
-   - Dashboard para modelo específico
-   GET /visualization/{model_name}/roc
-   - Imagen PNG de curva ROC
-   GET /visualization/{model_name}/learning_curve
-   - Imagen PNG de curva de aprendizaje
-
-FORMATO DE DATOS PARA PREDICCIONES
-===================================
-Todas las predicciones usan este formato JSON:
 {
   "features": [
-    {
-      "nombre_columna1": valor1,
-      "nombre_columna2": valor2,
-      ...
-    }
+    {"nombre_columna1": valor1, "nombre_columna2": valor2, ...}
   ]
 }
 
-TIPOS DE MODELOS AUTOMÁTICOS
-=============================
-CLASIFICACIÓN (detectado automáticamente):
-- RandomForest
-- LogisticRegression
-- GradientBoosting
-- SVM
-- KNN
-
-REGRESIÓN (detectado automáticamente):
-- RandomForest
-- Ridge
-- GradientBoosting
-- SVM
-- KNN
-
-ARQUITECTURA DEL SISTEMA
-=========================
-- Ray Head Node: Coordina el entrenamiento distribuido
-- Ray Worker Nodes: Ejecutan tareas de entrenamiento
-- API Server: Sirve predicciones y métricas
-- Trainer: Entrena modelos automáticamente al inicio
-- Todos los servicios en contenedores Docker separados
-- Modelos almacenados en actores Ray para servicio rápido
-- Sin volúmenes ni archivos compartidos - todo vía Ray
-
-CARACTERÍSTICAS PRINCIPALES
-============================
-1. Completamente Dinámico: Detecta automáticamente CUALQUIER CSV en /app/data/
-2. Sin Datasets Hardcodeados: Funciona con cualquier número y tipo de CSV
-3. Consciente de Datasets: Todos los endpoints soportan operaciones por dataset
-4. Tolerante a Fallos: Modelos disponibles aunque se elimine directorio datos
-5. Distribuido: Usa Ray para entrenamiento y servicio distribuido
-6. Sin Volúmenes: No requiere volúmenes Docker ni carpetas compartidas
-
-DOCUMENTACIÓN INTERACTIVA
-==========================
-Visitar: http://localhost:8000/docs
-- Documentación Swagger UI con todos los endpoints
-- Interfaz para probar la API directamente
-
-SOLUCIÓN DE PROBLEMAS
-=====================
-Si los modelos no están disponibles:
-1. Verificar entrenamiento: docker-compose logs trainer
-2. Verificar Ray cluster: docker-compose logs ray-head
-3. Verificar API server: docker-compose logs api-server
-
-Para reiniciar entrenamiento:
-docker-compose restart trainer
-
-Para ver logs en tiempo real:
-docker-compose logs -f api-server
-
-Para reiniciar todo el sistema:
-docker-compose down
-docker-compose up --build -d
-
-================================================================================
-                             COMANDOS PARA API
-================================================================================
-
-VERIFICAR ESTADO DEL SISTEMA
-=============================
-Invoke-RestMethod -Uri 'http://localhost:8000/health'
-
-LISTAR DATASETS DISPONIBLES
-============================
-Invoke-RestMethod -Uri 'http://localhost:8000/datasets'
-
-LISTAR TODOS LOS MODELOS
-=========================
-Invoke-RestMethod -Uri 'http://localhost:8000/models'
-
-LISTAR MODELOS POR DATASET
-===========================
-Invoke-RestMethod -Uri 'http://localhost:8000/models/iris'
-Invoke-RestMethod -Uri 'http://localhost:8000/models/wine'
-Invoke-RestMethod -Uri 'http://localhost:8000/models/breast_cancer'
-
-PREDICCIÓN CON MODELO ESPECÍFICO
-=================================
-# Iris (4 características)
-Invoke-RestMethod -Uri 'http://localhost:8000/predict/RandomForest_iris' -Method POST -Body '{"features": [{"sepal length (cm)": 5.1, "sepal width (cm)": 3.5, "petal length (cm)": 1.4, "petal width (cm)": 0.2}]}' -ContentType 'application/json'
-
-# Breast Cancer (30 características - ejemplo resumido, ver sección de formatos para el completo)
-Invoke-RestMethod -Uri 'http://localhost:8000/predict/RandomForest_breast_cancer' -Method POST -Body '{"features": [{"mean radius": 17.99, "mean texture": 10.38, "mean perimeter": 122.8, "mean area": 1001.0, "mean smoothness": 0.1184, "mean compactness": 0.2776, "mean concavity": 0.3001, "mean concave points": 0.1471, "mean symmetry": 0.2419, "mean fractal dimension": 0.07871, "radius error": 1.095, "texture error": 0.9053, "perimeter error": 8.589, "area error": 153.4, "smoothness error": 0.006399, "compactness error": 0.04904, "concavity error": 0.05373, "concave points error": 0.01587, "symmetry error": 0.03003, "fractal dimension error": 0.006193, "worst radius": 25.38, "worst texture": 17.33, "worst perimeter": 184.6, "worst area": 2019.0, "worst smoothness": 0.1622, "worst compactness": 0.6656, "worst concavity": 0.7119, "worst concave points": 0.2654, "worst symmetry": 0.4601, "worst fractal dimension": 0.1189}]}' -ContentType 'application/json'
-
-PREDICCIÓN POR TIPO DE MODELO Y DATASET
-========================================
-Invoke-RestMethod -Uri 'http://localhost:8000/predict/RandomForest/iris' -Method POST -Body '{"features": [{"sepal length (cm)": 5.1, "sepal width (cm)": 3.5, "petal length (cm)": 1.4, "petal width (cm)": 0.2}]}' -ContentType 'application/json'
-
-PREDICCIÓN CON TODOS LOS MODELOS DE UN DATASET
-===============================================
-Invoke-RestMethod -Uri 'http://localhost:8000/predict/all/iris' -Method POST -Body '{"features": [{"sepal length (cm)": 5.1, "sepal width (cm)": 3.5, "petal length (cm)": 1.4, "petal width (cm)": 0.2}]}' -ContentType 'application/json'
-
-PREDICCIÓN CON RESPUESTA COMPLETA (RECOMENDADO)
-================================================
-$response = Invoke-RestMethod -Uri 'http://localhost:8000/predict/all/iris' -Method POST -Body '{"features": [{"sepal length (cm)": 5.1, "sepal width (cm)": 3.5, "petal length (cm)": 1.4, "petal width (cm)": 0.2}]}' -ContentType 'application/json'
-$response | ConvertTo-Json -Depth 10
-
-OBTENER MÉTRICAS DE UN MODELO
-==============================
-Invoke-RestMethod -Uri 'http://localhost:8000/metrics/RandomForest_iris'
-
-OBTENER MÉTRICAS DE TODOS LOS MODELOS
-======================================
-Invoke-RestMethod -Uri 'http://localhost:8000/metrics/all'
-
-VISUALIZACIONES EN NAVEGADOR
-=============================
-# Dashboard general de todos los modelos
-http://localhost:8000/visualization/all
-
-# Dashboard de un modelo específico
-http://localhost:8000/visualization/RandomForest_iris
-
-# Solo imagen ROC
-http://localhost:8000/visualization/RandomForest_iris/roc
-
-# Solo imagen Learning Curve
-http://localhost:8000/visualization/RandomForest_iris/learning_curve
-
-
-================================================================================
-                          FORMA ACTUAL DE LOS DATASETS
-================================================================================
-
-DATASET: IRIS (Clasificación)
-==============================
-Características (4):
-- "sepal length (cm)": número decimal (ej: 5.1)
-- "sepal width (cm)": número decimal (ej: 3.5)
-- "petal length (cm)": número decimal (ej: 1.4)
-- "petal width (cm)": número decimal (ej: 0.2)
-
-Clases de salida:
-- 0 = Setosa
-- 1 = Versicolor  
-- 2 = Virginica
-
-Ejemplo de predicción:
+EJEMPLO IRIS:
 {"features": [{"sepal length (cm)": 5.1, "sepal width (cm)": 3.5, "petal length (cm)": 1.4, "petal width (cm)": 0.2}]}
 
-DATASET: WINE (Clasificación)
-==============================
-Características (13):
-- "alcohol": número decimal (ej: 13.2)
-- "malic_acid": número decimal (ej: 2.3)
-- "ash": número decimal (ej: 2.4)
-- "alcalinity_of_ash": número decimal (ej: 18.5)
-- "magnesium": número decimal (ej: 108.0)
-- "total_phenols": número decimal (ej: 2.9)
-- "flavanoids": número decimal (ej: 3.1)
-- "nonflavanoid_phenols": número decimal (ej: 0.3)
-- "proanthocyanins": número decimal (ej: 2.0)
-- "color_intensity": número decimal (ej: 5.6)
-- "hue": número decimal (ej: 1.15)
-- "od280/od315_of_diluted_wines": número decimal (ej: 2.8)
-- "proline": número decimal (ej: 1320.0)
+EJEMPLO WINE:
+{"features": [{"alcohol": 13.2, "malic_acid": 2.3, ...}]}
 
-Clases de salida:
-- 0 = Vino clase 0
-- 1 = Vino clase 1
-- 2 = Vino clase 2
+EJEMPLO BREAST_CANCER:
+{"features": [{"mean radius": 17.99, ... (30 características) ...}]}
 
-Ejemplo de predicción:
-{"features": [{"alcohol": 13.2, "malic_acid": 2.3, "ash": 2.4, "alcalinity_of_ash": 18.5, "magnesium": 108.0, "total_phenols": 2.9, "flavanoids": 3.1, "nonflavanoid_phenols": 0.3, "proanthocyanins": 2.0, "color_intensity": 5.6, "hue": 1.15, "od280/od315_of_diluted_wines": 2.8, "proline": 1320.0}]}
+NOTAS IMPORTANTES
+=================
+- Los nombres de las columnas deben coincidir exactamente con los del CSV.
+- Si falta una característica, la predicción fallará.
+- Para ver las columnas exactas, revisa el CSV en /app/data/ o usa /docs.
+- La curva ROC de SVM solo se genera si el modelo fue entrenado con probability=True.
 
-DATASET: BREAST_CANCER (Clasificación)
-=======================================
-Características (30 características requeridas):
-- "mean radius": número decimal
-- "mean texture": número decimal  
-- "mean perimeter": número decimal
-- "mean area": número decimal
-- "mean smoothness": número decimal
-- "mean compactness": número decimal
-- "mean concavity": número decimal
-- "mean concave points": número decimal
-- "mean symmetry": número decimal
-- "mean fractal dimension": número decimal
-- "radius error": número decimal
-- "texture error": número decimal
-- "perimeter error": número decimal
-- "area error": número decimal
-- "smoothness error": número decimal
-- "compactness error": número decimal
-- "concavity error": número decimal
-- "concave points error": número decimal
-- "symmetry error": número decimal
-- "fractal dimension error": número decimal
-- "worst radius": número decimal
-- "worst texture": número decimal
-- "worst perimeter": número decimal
-- "worst area": número decimal
-- "worst smoothness": número decimal
-- "worst compactness": número decimal
-- "worst concavity": número decimal
-- "worst concave points": número decimal
-- "worst symmetry": número decimal
-- "worst fractal dimension": número decimal
-
-Clases de salida:
-- 0 = Benigno
-- 1 = Maligno
-
-Ejemplo de predicción (TODAS las 30 características son requeridas):
-{"features": [{"mean radius": 17.99, "mean texture": 10.38, "mean perimeter": 122.8, "mean area": 1001.0, "mean smoothness": 0.1184, "mean compactness": 0.2776, "mean concavity": 0.3001, "mean concave points": 0.1471, "mean symmetry": 0.2419, "mean fractal dimension": 0.07871, "radius error": 1.095, "texture error": 0.9053, "perimeter error": 8.589, "area error": 153.4, "smoothness error": 0.006399, "compactness error": 0.04904, "concavity error": 0.05373, "concave points error": 0.01587, "symmetry error": 0.03003, "fractal dimension error": 0.006193, "worst radius": 25.38, "worst texture": 17.33, "worst perimeter": 184.6, "worst area": 2019.0, "worst smoothness": 0.1622, "worst compactness": 0.6656, "worst concavity": 0.7119, "worst concave points": 0.2654, "worst symmetry": 0.4601, "worst fractal dimension": 0.1189}]}
-
-NOTAS IMPORTANTES SOBRE LOS DATASETS
-=====================================
-1. Los nombres de las características DEBEN coincidir EXACTAMENTE con los del CSV
-2. Usar SIEMPRE comillas dobles para los nombres de características
-3. Los valores numéricos pueden ser enteros o decimales
-4. Si falta una característica, la predicción fallará
-5. Para ver las características exactas de un dataset, revisar el archivo CSV en /app/data/
-6. IMPORTANTE: El dataset breast_cancer requiere TODAS las 30 características
-7. IMPORTANTE: El dataset wine requiere TODAS las 13 características
-8. El dataset iris solo requiere las 4 características mostradas
-
-COMANDOS PARA VER ESTRUCTURA DE DATASETS
-=========================================
-Para ver los nombres exactos de las columnas:
-1. Hacer una predicción de prueba y ver el error (si hay nombres incorrectos)
-2. Revisar los archivos CSV en el directorio data/
-3. Usar el endpoint de documentación: http://localhost:8000/docs
+TROUBLESHOOTING
+===============
+- Si la API no responde: docker-compose logs api-server
+- Si no hay modelos: docker-compose logs trainer
+- Si el cluster Ray no está healthy: docker-compose logs ray-head
+- Para reiniciar solo el entrenamiento: docker-compose restart trainer
+================================================================================

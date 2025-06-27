@@ -159,7 +159,7 @@ def train_multiple_models(models, X_train, y_train, X_test, y_test, model_names=
     return trained_models, all_metrics
 
 # Ray actor for distributed, in-memory model storage and prediction
-@ray.remote(max_restarts=-1, max_task_retries=-1)
+@ray.remote(max_restarts=-1, max_task_retries=3, num_cpus=0.5)
 class ModelActor:
     def __init__(self, model, model_name):
         """
@@ -173,6 +173,16 @@ class ModelActor:
         self.model_name = model_name
         self.metrics = {}
         self.training_data = {}  # Store training data for plotting
+        self.node_id = ray.get_runtime_context().get_node_id()
+        logger.info(f"ModelActor {model_name} initialized on node {self.node_id}")
+    
+    def get_health(self):
+        """Check if the actor is healthy and return node information"""
+        return {
+            'model_name': self.model_name,
+            'node_id': self.node_id,
+            'status': 'healthy'
+        }
     
     def predict(self, features):
         """
