@@ -9,7 +9,7 @@ import sys
 import ray
 import numpy as np
 from sklearn.ensemble import (
-    RandomForestClassifier, GradientBoostingClassifier, 
+    RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier, GradientBoostingRegressor,
     AdaBoostClassifier, ExtraTreesClassifier
 )
 from sklearn.linear_model import (
@@ -72,6 +72,7 @@ def parse_args():
     parser.add_argument('--model-backup-dirs', type=str, nargs='+', help='Backup directories for model redundancy')
     parser.add_argument('--host', type=str, help='Host to bind the API server to', default='0.0.0.0')
     parser.add_argument('--port', type=int, help='Port to bind the API server to', default=8000)
+    parser.add_argument('--reload', action='store_true', help='Enable auto-reload for development')
     parser.add_argument('--verify-models', action='store_true', help='Verify model integrity before loading')
     
     # Visualization settings
@@ -167,6 +168,13 @@ def main():
             logger.error("Failed to load and preprocess datasets.")
             sys.exit(1)
         
+        # Extract dataset names from file paths for model naming
+        dataset_names = []
+        for data_file in args.data:
+            # Extract filename without extension and path
+            dataset_name = os.path.splitext(os.path.basename(data_file))[0]
+            dataset_names.append(dataset_name)
+        
         # Train models for each dataset
         for i, dataset in enumerate(processed_datasets):
             if dataset is None or len(dataset) < 4:
@@ -174,37 +182,48 @@ def main():
                 continue
                 
             X_train, X_test, y_train, y_test = dataset
+            dataset_name = dataset_names[i] if i < len(dataset_names) else f"dataset_{i+1}"
             
-            logger.info(f"Training models for dataset {i+1}/{len(processed_datasets)}")
+            logger.info(f"Training models for dataset: {dataset_name} ({i+1}/{len(processed_datasets)})")
             
             # Check if it's a classification or regression task
             is_classification = len(np.unique(y_train)) < 10  # Assuming classification if fewer classes
             
             if is_classification:
-                # Define classification models to train (3 models for fast testing)
+                # Define classification models to train (exactly 5 models as requested)
                 models = [
-                    RandomForestClassifier(n_estimators=100),
-                    LogisticRegression(max_iter=1000),
-                    GradientBoostingClassifier()
+                    RandomForestClassifier(n_estimators=100, random_state=42),
+                    LogisticRegression(max_iter=1000, random_state=42),
+                    GradientBoostingClassifier(random_state=42),
+                    SVC(probability=True, random_state=42),  # Enable probability for ROC curve
+                    KNeighborsClassifier(n_neighbors=5)
                 ]
                 
+                # Include dataset name in model names for distributed identification
                 model_names = [
-                    f"RandomForest_ds{i+1}",
-                    f"LogisticRegression_ds{i+1}",
-                    f"GradientBoosting_ds{i+1}"
+                    f"RandomForest_{dataset_name}",
+                    f"LogisticRegression_{dataset_name}", 
+                    f"GradientBoosting_{dataset_name}",
+                    f"SVM_{dataset_name}",
+                    f"KNN_{dataset_name}"
                 ]
             else:
-                # Define regression models to train (3 models for fast testing)
+                # Define regression models to train (exactly 5 models as requested)
                 models = [
-                    Ridge(alpha=1.0),
-                    ElasticNet(alpha=0.1, l1_ratio=0.5),
-                    DecisionTreeRegressor()
+                    RandomForestRegressor(n_estimators=100, random_state=42),
+                    Ridge(alpha=1.0, random_state=42),
+                    GradientBoostingRegressor(random_state=42),
+                    SVR(),
+                    KNeighborsRegressor(n_neighbors=5)
                 ]
                 
+                # Include dataset name in model names for distributed identification
                 model_names = [
-                    f"Ridge_ds{i+1}",
-                    f"ElasticNet_ds{i+1}",
-                    f"DecisionTreeRegressor_ds{i+1}"
+                    f"RandomForest_{dataset_name}",
+                    f"Ridge_{dataset_name}",
+                    f"GradientBoosting_{dataset_name}", 
+                    f"SVM_{dataset_name}",
+                    f"KNN_{dataset_name}"
                 ]
         
             # Train models with fault tolerance
@@ -286,7 +305,15 @@ def main():
         logger.info(f"Starting API server at http://{args.host}:{args.port}")
         
         # Run the server in a way that allows graceful shutdown
-        config = uvicorn.Config(app=app, host=args.host, port=args.port, log_level="info")
+        config = uvicorn.Config(
+            app=app, 
+            host=args.host, 
+            port=args.port, 
+            log_level="info",
+            reload=args.reload,
+            # Note: reload_dirs removed for distributed deployment without volumes
+            # Code changes require container rebuild in distributed mode
+        )
         server = uvicorn.Server(config)
         
         try:
