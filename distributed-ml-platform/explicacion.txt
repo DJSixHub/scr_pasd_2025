@@ -1,0 +1,386 @@
+================================================================================
+                   EXPLICACIÓN TÉCNICA COMPLETA DEL PROYECTO
+              PLATAFORMA ML DISTRIBUIDA CON RAY Y DOCKER
+================================================================================
+
+RESUMEN DEL SISTEMA
+===================
+Este proyecto implementa una plataforma de Machine Learning completamente 
+distribuida usando Ray, Docker, FastAPI y Scikit-Learn. El sistema detecta 
+automáticamente datasets, entrena múltiples modelos de forma distribuida, 
+y los sirve a través de una API REST con capacidades de visualización.
+
+ARQUITECTURA GENERAL
+====================
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│   API Server    │  │   Ray Head      │  │  Ray Worker 1   │  │  Ray Worker 2   │
+│                 │  │                 │  │                 │  │                 │
+│ FastAPI + Uvicorn│  │ Ray Scheduler   │  │ Model Training  │  │ Model Training  │
+│ Puerto 8000     │  │ Puerto 6379     │  │ Actor Storage   │  │ Actor Storage   │
+│                 │  │ Puerto 8265     │  │                 │  │                 │
+└─────────────────┘  └─────────────────┘  └─────────────────┘  └─────────────────┘
+         │                     │                     │                     │
+         └─────────────────────┼─────────────────────┼─────────────────────┘
+                               │                     │
+                        Comunicación Ray TCP/IP      │
+                                               Red Docker: ray-network
+
+================================================================================
+                            PROCESO PASO A PASO
+================================================================================
+
+PASO 1: CONSTRUCCIÓN DE CONTENEDORES
+====================================
+Cuando ejecutas: docker-compose up --build
+
+1.1 DOCKERFILE BASE
+-------------------
+El sistema usa UN SOLO Dockerfile para todos los servicios:
+
+FROM python:3.9-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+
+- Instala Python 3.9
+- Instala dependencias: ray[default], fastapi, uvicorn, scikit-learn, etc.
+- Copia TODO el código fuente al contenedor
+
+1.2 SERVICIOS DEFINIDOS EN DOCKER-COMPOSE.YML
+----------------------------------------------
+
+RAY-HEAD (Nodo Coordinador):
+- Puerto 6379: Ray dashboard y comunicación interna
+- Puerto 8265: Ray Web UI
+- Puerto 10001: GCS (Global Control Store)
+- Comando: ray start --head --dashboard-host=0.0.0.0 --port=6379
+- Función: Coordina el cluster, asigna tareas, mantiene estado global
+
+RAY-WORKER-1 y RAY-WORKER-2 (Nodos Trabajadores):
+- Se conectan al head via: ray start --address=ray-head:6379
+- Esperan 10-12 segundos para que el head esté listo
+- Función: Ejecutan tareas de entrenamiento, almacenan actores de modelos
+
+API-SERVER (Servidor de API):
+- Puerto 8000: API REST
+- Espera 30 segundos para que Ray cluster esté completo
+- Ejecuta: uvicorn src.serving.api:app --host 0.0.0.0 --port 8000
+- Función: Sirve predicciones, métricas y visualizaciones
+
+TRAINER (Entrenador de Modelos):
+- Ejecuta UNA VEZ el script main.py
+- Se apaga automáticamente después de entrenar
+- Función: Detecta datasets, entrena modelos, crea actores Ray
+
+PASO 2: INICIALIZACIÓN DEL CLUSTER RAY
+=======================================
+
+2.1 RAY HEAD SE INICIA PRIMERO
+-------------------------------
+Código en docker-compose.yml:
+```
+ray-head:
+  command: |
+    bash -c "
+    ray start --head --dashboard-host=0.0.0.0 --port=6379 --disable-usage-stats &&
+    tail -f /dev/null
+    "
+```
+
+¿Qué hace internamente Ray?
+- Inicia el GCS (Global Control Store) en puerto 10001
+- Inicia el Raylet (administrador local de recursos)
+- Inicia el Dashboard web en puerto 8265
+- Registra recursos disponibles (CPU, memoria)
+- Se convierte en el punto de coordinación central
+
+2.2 RAY WORKERS SE CONECTAN
+----------------------------
+Código en docker-compose.yml:
+```
+ray-worker-1:
+  command: |
+    bash -c "
+    sleep 10 &&
+    ray start --address=ray-head:6379 &&
+    tail -f /dev/null
+    "
+```
+
+¿Qué sucede internamente?
+- Worker contacta al head en ray-head:6379
+- Head registra al worker en su tabla de nodos
+- Worker reporta sus recursos (CPU, memoria)
+- Worker inicia su propio Raylet local
+- Worker queda listo para recibir tareas
+
+2.3 VERIFICACIÓN DE CLUSTER
+----------------------------
+Puedes verificar el estado con:
+```
+ray status  # Desde cualquier contenedor
+```
+
+PASO 3: ENTRENAMIENTO DISTRIBUIDO DE MODELOS
+=============================================
+
+3.1 DETECCIÓN AUTOMÁTICA DE DATASETS
+-------------------------------------
+Código en main.py:
+```python
+import glob
+import os
+
+# Detecta todos los archivos CSV en /app/data/
+data_dir = "/app/data"
+csv_files = glob.glob(os.path.join(data_dir, "*.csv"))
+datasets = {}
+
+for file_path in csv_files:
+    dataset_name = os.path.basename(file_path).replace('.csv', '')
+    datasets[dataset_name] = file_path
+```
+
+¿Por qué funciona esto?
+- Monta el directorio data/ como parte de la imagen Docker
+- No usa volúmenes externos para ser completamente autónomo
+- Detecta dinámicamente cualquier archivo CSV añadido
+
+3.2 CREACIÓN DE ACTORES DE MODELO
+----------------------------------
+Código en main.py:
+```python
+@ray.remote
+class ModelActor:
+    def __init__(self, model_name, model_type, dataset_name):
+        self.model_name = model_name
+        self.model = None
+        self.X_train = None
+        self.y_train = None
+        self.training_data_stored = False
+    
+    def train(self, X_train, y_train):
+        # Entrenamiento del modelo
+        # Almacena datos de entrenamiento para visualizaciones
+        pass
+    
+    def predict(self, features):
+        # Realiza predicciones
+        pass
+    
+    def get_metrics(self):
+        # Calcula métricas del modelo
+        pass
+
+# Crear actores distribuidos
+for dataset_name, models in trained_models.items():
+    for model_name, model_obj in models.items():
+        actor = ModelActor.options(name=model_name).remote(
+            model_name, type(model_obj).__name__, dataset_name
+        )
+        ray.get(actor.train.remote(X_train, y_train))
+```
+
+¿Por qué usar Ray Actors?
+- PERSISTENCIA: Los actores mantienen estado entre llamadas
+- DISTRIBUCIÓN: Ray automáticamente distribuye actores entre workers
+- PARALELISMO: Múltiples actores pueden procesar simultáneamente
+- FAULT TOLERANCE: Ray recrea actores automáticamente si un worker falla
+
+3.3 DISTRIBUCIÓN AUTOMÁTICA
+----------------------------
+Ray automáticamente:
+- Distribuye actores entre ray-worker-1 y ray-worker-2
+- Balancea carga basado en recursos disponibles
+- Mantiene referencias globales para acceso desde cualquier nodo
+- Replica actores críticos para tolerancia a fallos
+
+PASO 4: ALMACENAMIENTO Y ACCESO DISTRIBUIDO
+============================================
+
+4.1 ALMACENAMIENTO EN MEMORIA DISTRIBUIDA
+------------------------------------------
+Los modelos NO se guardan en disco, sino en memoria distribuida:
+
+```python
+# En ModelActor
+def train(self, X_train, y_train):
+    self.model = RandomForestClassifier()
+    self.model.fit(X_train, y_train)
+    
+    # IMPORTANTE: Guarda datos de entrenamiento para visualizaciones
+    self.X_train = X_train.copy()
+    self.y_train = y_train.copy()
+    self.training_data_stored = True
+```
+
+Ventajas:
+- VELOCIDAD: Acceso inmediato sin I/O de disco
+- DISTRIBUCIÓN: Modelos distribuidos entre múltiples nodos
+- ESCALABILIDAD: Añadir más workers aumenta capacidad automáticamente
+- FAULT TOLERANCE: Ray replica automáticamente actores críticos
+
+4.2 ACCESO DESDE LA API
+-----------------------
+Código en src/serving/api.py:
+```python
+async def predict(self, request_dict, model_name: str):
+    # Obtiene el actor por nombre desde cualquier worker
+    actor = ray.get_actor(model_name)
+    
+    # Llama al método remotamente
+    result = ray.get(actor.predict.remote(features))
+    
+    return result
+```
+
+¿Cómo funciona ray.get_actor()?
+- Ray mantiene un registro global de actores por nombre
+- La llamada puede acceder a actores en cualquier worker
+- Ray enruta automáticamente las llamadas al worker correcto
+- Si el worker falla, Ray puede recrear el actor en otro worker
+
+PASO 5: API REST Y SERVICIO DE PREDICCIONES
+============================================
+
+5.1 INICIALIZACIÓN DE LA API
+-----------------------------
+Código en src/serving/api.py:
+```python
+# Detecta modelos disponibles conectándose a Ray
+ray.init(address="ray://ray-head:10001", ignore_reinit_error=True)
+
+# Lista actores disponibles
+model_names = []
+for actor_name in ray.list_named_actors():
+    if any(model_type in actor_name for model_type in 
+           ['RandomForest', 'SVM', 'KNN', 'LogisticRegression', 'GradientBoosting']):
+        model_names.append(actor_name)
+
+# Crea app FastAPI con modelos detectados
+app = create_app(model_names)
+```
+
+5.2 MANEJO DE PREDICCIONES
+---------------------------
+```python
+@app.post("/predict/{model_name}")
+async def predict_specific(model_name: str, request: PredictionFeatures):
+    # Valida que el modelo existe
+    if model_name not in model_names:
+        raise HTTPException(status_code=404)
+    
+    # Obtiene actor distribuido
+    actor = ray.get_actor(model_name)
+    
+    # Llama método remoto
+    result = ray.get(actor.predict.remote(request.features))
+    
+    return {"model": model_name, "predictions": result}
+```
+
+5.3 GENERACIÓN DE VISUALIZACIONES
+----------------------------------
+```python
+@app.get("/visualization/{model_name}/roc")
+async def get_roc_curve(model_name: str):
+    actor = ray.get_actor(model_name)
+    
+    # El actor genera la gráfica usando datos de entrenamiento almacenados
+    plot_data = ray.get(actor.generate_roc_plot.remote())
+    
+    # Convierte a PNG y retorna como imagen
+    return StreamingResponse(io.BytesIO(plot_data), media_type="image/png")
+```
+
+PASO 6: TOLERANCIA A FALLOS Y RECUPERACIÓN
+===========================================
+
+6.1 FALLOS DE WORKERS
+----------------------
+Si ray-worker-1 falla:
+1. Ray head detecta la desconexión automáticamente
+2. Actores en ese worker se marcan como "perdidos"
+3. Ray automáticamente recrea actores en ray-worker-2
+4. Los nuevos actores se re-entrenan automáticamente
+5. La API sigue funcionando sin interrupción
+
+6.2 FALLOS DEL HEAD
+-------------------
+Si ray-head falla:
+1. Todo el cluster se detiene
+2. docker-compose restart reinicia todos los servicios
+3. El entrenamiento se ejecuta nuevamente automáticamente
+4. Los modelos se recrean en memoria distribuida
+
+6.3 CÓDIGO DE RECUPERACIÓN
+---------------------------
+```python
+# En ModelActor
+def train(self, X_train, y_train):
+    try:
+        # Entrenamiento normal
+        self.model.fit(X_train, y_train)
+    except Exception as e:
+        logger.error(f"Training failed for {self.model_name}: {e}")
+        # Ray automáticamente reintenta en otro worker
+        raise
+```
+
+================================================================================
+                        FLUJO COMPLETO DE DATOS
+================================================================================
+
+1. INICIO
+   docker-compose up
+   ↓
+2. CONSTRUCCIÓN
+   4 contenedores construidos con mismo Dockerfile
+   ↓
+3. RAY CLUSTER
+   ray-head inicia → workers se conectan → cluster listo
+   ↓
+4. ENTRENAMIENTO
+   trainer detecta CSVs → entrena modelos → crea actores distribuidos
+   ↓
+5. DISTRIBUCIÓN
+   Ray distribuye actores entre workers automáticamente
+   ↓
+6. API LISTA
+   api-server detecta actores → FastAPI lista para servir
+   ↓
+7. PREDICCIONES
+   Usuario hace request → API encuentra actor → llama método remoto → retorna resultado
+
+================================================================================
+                            VENTAJAS DEL DISEÑO
+================================================================================
+
+DISTRIBUCIÓN REAL:
+- Modelos ejecutándose en múltiples máquinas/contenedores
+- Balanceamiento automático de carga
+- Escalabilidad horizontal (agregar más workers)
+
+TOLERANCIA A FALLOS:
+- Recreación automática de actores
+- Supervivencia a fallos de nodos individuales
+- Estado distribuido sin puntos únicos de fallo
+
+RENDIMIENTO:
+- Modelos en memoria (sin I/O de disco)
+- Paralelismo real en predicciones
+- Latencia baja por distribución óptima
+
+AUTONOMÍA:
+- Sin dependencias externas
+- Sin volúmenes compartidos
+- Completamente autocontenido
+
+ESCALABILIDAD:
+- Añadir workers aumenta capacidad automáticamente
+- Detección automática de nuevos datasets
+- API autodescubre modelos disponibles
+
+Este diseño permite que la plataforma sea verdaderamente distribuida, tolerante
+a fallos, y escalable, mientras mantiene simplicidad operacional.
