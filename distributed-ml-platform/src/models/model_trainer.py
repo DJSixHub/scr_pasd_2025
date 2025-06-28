@@ -161,20 +161,20 @@ def train_multiple_models(models, X_train, y_train, X_test, y_test, model_names=
 # Ray actor for distributed, in-memory model storage and prediction
 @ray.remote(max_restarts=-1, max_task_retries=3, num_cpus=0.5)
 class ModelActor:
-    def __init__(self, model, model_name):
+    def __init__(self, model=None, model_name=None):
         """
         Initialize the ModelActor with a scikit-learn model and its name.
         
         Args:
-            model: The scikit-learn model to be used for predictions.
+            model: The scikit-learn model to be used for predictions (optional).
             model_name: A string representing the name of the model.
         """
         self.model = model
-        self.model_name = model_name
+        self.model_name = model_name or "Unknown"
         self.metrics = {}
         self.training_data = {}  # Store training data for plotting
         self.node_id = ray.get_runtime_context().get_node_id()
-        logger.info(f"ModelActor {model_name} initialized on node {self.node_id}")
+        logger.info(f"ModelActor {self.model_name} initialized on node {self.node_id}")
     
     def get_health(self):
         """Check if the actor is healthy and return node information"""

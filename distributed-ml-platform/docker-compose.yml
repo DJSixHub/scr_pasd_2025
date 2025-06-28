@@ -1,112 +1,26 @@
+version: '3.8'
 services:
-  # Ray head node (cluster only)
-  ray-head:
-    build: .
+  ml-platform:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ml-platform
     ports:
+      - "8000:8000"  # FastAPI backend
+      - "8501:8501"  # Streamlit frontend
       - "8265:8265"  # Ray dashboard
-      - "10001:10001"  # Ray client server
-      - "6379:6379"  # Redis
-    command: >
-      bash -c "ray start --head --port=6379 --dashboard-host=0.0.0.0 --dashboard-port=8265 --ray-client-server-port=10001 --object-manager-port=6380 --disable-usage-stats --block"
     environment:
-      - RAY_DISABLE_DOCKER_CPU_WARNING=1
-      - PYTHONUNBUFFERED=1
-      - RAY_ADDRESS=ray-head:6379
-    healthcheck:
-      test: ["CMD", "ray", "status"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: '4.0'
-          memory: 6G
-      restart_policy:
-        condition: on-failure
-        max_attempts: 3
-    shm_size: '2gb'
+      - RAY_DISABLE_IMPORT_WARNING=1
+      - STREAMLIT_SERVER_PORT=8501
+    command: >
+      sh -c "
+        ray start --head --port=6379 --disable-usage-stats --dashboard-host=0.0.0.0 &&
+        uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
+        streamlit run interface.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true
+      "
+    networks:
+      - ml-net
 
-  # Ray worker nodes for distributed processing
-  ray-worker-1:
-    build: .
-    depends_on:
-      - ray-head
-    command: >
-      bash -c "sleep 10 && ray start --address=ray-head:6379 --block"
-    environment:
-      - RAY_DISABLE_DOCKER_CPU_WARNING=1
-      - RAY_ADDRESS=ray-head:6379
-    deploy:
-      resources:
-        limits:
-          cpus: '3.0'
-          memory: 3G
-      restart_policy:
-        condition: on-failure
-        max_attempts: 3
-    shm_size: '2gb'
-
-  ray-worker-2:
-    build: .
-    depends_on:
-      - ray-head
-    command: >
-      bash -c "sleep 12 && ray start --address=ray-head:6379 --block"
-    environment:
-      - RAY_DISABLE_DOCKER_CPU_WARNING=1
-      - RAY_ADDRESS=ray-head:6379
-    deploy:
-      resources:
-        limits:
-          cpus: '3.0'
-          memory: 3G
-      restart_policy:
-        condition: on-failure
-        max_attempts: 3
-    shm_size: '2gb'
-
-  # Training service (runs once, then exits)
-  trainer:
-    build: .
-    depends_on:
-      - ray-head
-      - ray-worker-1
-      - ray-worker-2
-    command: >
-      bash -c "for i in {1..30}; do nc -z ray-head 6379 && break; echo 'Waiting for Ray head...'; sleep 2; done; \
-               python main.py --mode=train --data /app/data/*.csv --target=target --output-dir=/app/output --ray-redundancy=2 --failure-tolerant --address=ray://ray-head:10001"
-    environment:
-      - RAY_DISABLE_DOCKER_CPU_WARNING=1
-      - PYTHONUNBUFFERED=1
-      - RAY_ADDRESS=ray-head:6379
-    shm_size: '2gb'
-    deploy:
-      restart_policy:
-        condition: none
-
-  # API serving service (persistent) - Waits for training to complete
-  api-server:
-    build: .
-    depends_on:
-      - ray-head
-      - trainer
-    ports:
-      - "8000:8000"  # API port
-    command: >
-      bash -c "for i in {1..120}; do nc -z ray-head 6379 && break; echo 'Waiting for Ray head...'; sleep 2; done; \
-               echo 'Waiting additional time for training to complete...'; sleep 30; \
-               python main.py --mode=serve --host=0.0.0.0 --port=8000 --output-dir=/app/output --address=ray://ray-head:10001"
-    environment:
-      - RAY_DISABLE_DOCKER_CPU_WARNING=1
-      - PYTHONUNBUFFERED=1
-      - RAY_ADDRESS=ray-head:6379
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 4G
-      restart_policy:
-        condition: on-failure
-        max_attempts: 3
-    shm_size: '2gb'
+networks:
+  ml-net:
+    driver: bridge

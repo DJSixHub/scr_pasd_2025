@@ -301,6 +301,73 @@ def create_app(model_names):
         except Exception as e:
             raise HTTPException(status_code=404, detail=f"Model {model_name} not found: {str(e)}")
 
+    # 7. VISUALIZATIONS - Generate plots for models
+    @app.get("/plot/{model_name}/roc")
+    async def plot_roc_curve(model_name: str):
+        """Generate ROC curve for a specific model"""
+        try:
+            actor = ray.get_actor(model_name)
+            plot_data = ray.get(actor.generate_roc_curve.remote())
+            return plot_data
+        except Exception as e:
+            raise HTTPException(status_code=404, detail={'error': f'Could not generate ROC curve for {model_name}: {str(e)}'})
+
+    @app.get("/plot/{model_name}/learning")
+    async def plot_learning_curve(model_name: str):
+        """Generate learning curve for a specific model"""
+        try:
+            actor = ray.get_actor(model_name)
+            plot_data = ray.get(actor.generate_learning_curve.remote())
+            return plot_data
+        except Exception as e:
+            raise HTTPException(status_code=404, detail={'error': f'Could not generate learning curve for {model_name}: {str(e)}'})
+
+    @app.get("/plot/{model_name}/roc/png")
+    async def plot_roc_curve_png(model_name: str):
+        """Generate ROC curve as PNG image for a specific model"""
+        try:
+            actor = ray.get_actor(model_name)
+            png_data = ray.get(actor.generate_roc_png.remote())
+            if 'error' in png_data:
+                raise HTTPException(status_code=500, detail=png_data)
+            
+            # Return base64 PNG image
+            return {
+                'model_name': model_name,
+                'image_base64': png_data['roc_curve_png'],
+                'format': 'png'
+            }
+        except Exception as e:
+            raise HTTPException(status_code=404, detail={'error': f'Could not generate ROC curve PNG for {model_name}: {str(e)}'})
+
+    @app.get("/plot/{model_name}/learning/png")
+    async def plot_learning_curve_png(model_name: str):
+        """Generate learning curve as PNG image for a specific model"""
+        try:
+            actor = ray.get_actor(model_name)
+            png_data = ray.get(actor.generate_learning_curve_png.remote())
+            if 'error' in png_data:
+                raise HTTPException(status_code=500, detail=png_data)
+            
+            # Return base64 PNG image
+            return {
+                'model_name': model_name,
+                'image_base64': png_data['learning_curve_png'],
+                'format': 'png'
+            }
+        except Exception as e:
+            raise HTTPException(status_code=404, detail={'error': f'Could not generate learning curve PNG for {model_name}: {str(e)}'})
+
+    @app.get("/plot/{model_name}/all")
+    async def plot_all_data(model_name: str):
+        """Generate all plot data for a specific model"""
+        try:
+            actor = ray.get_actor(model_name)
+            plot_data = ray.get(actor.generate_plot_data.remote())
+            return plot_data
+        except Exception as e:
+            raise HTTPException(status_code=404, detail={'error': f'Could not generate plot data for {model_name}: {str(e)}'})
+
     # 8. VISUALIZATION(all) - HTML dashboard showing all models  
     @app.get("/visualization/all")
     async def visualization_all():
@@ -487,6 +554,152 @@ def create_app(model_names):
             return {'healthy_models': healthy_models, 'count': len(healthy_models)}
         except Exception as e:
             return {'error': str(e), 'healthy_models': [], 'count': 0}
+
+    # NEW ENDPOINTS FOR STREAMLIT WORKFLOW
+    
+    # Training endpoint (on-demand)
+    @app.post("/train")
+    async def train_models(request: Dict[str, Any]):
+        """Start distributed training with user-provided datasets and configuration"""
+        try:
+            datasets = request.get('datasets', {})
+            ml_tasks = request.get('ml_tasks', {})
+            targets = request.get('targets', {})
+            model_selections = request.get('model_selections', {})  # Optional model selection per dataset
+            
+            if not datasets or not ml_tasks or not targets:
+                raise HTTPException(status_code=400, detail="Missing required fields: datasets, ml_tasks, targets")
+            
+            # Import training function
+            from src.models.model_trainer import train_multiple_models, ModelActor
+            import pandas as pd
+            import numpy as np
+            
+            # Process each dataset
+            results = {}
+            for dataset_name, dataset_records in datasets.items():
+                df = pd.DataFrame(dataset_records)
+                task = ml_tasks[dataset_name]
+                target = targets[dataset_name]
+                selected_models = model_selections.get(dataset_name, [])
+                
+                # Convert task name to classification/regression
+                is_classification = task == "Clasificación"
+                
+                # Split features and target
+                if target not in df.columns:
+                    raise HTTPException(status_code=400, detail=f"Target column '{target}' not found in dataset '{dataset_name}'")
+                
+                X = df.drop(target, axis=1)
+                y = df[target]
+                
+                # Convert categorical features to numeric
+                X = pd.get_dummies(X)
+                
+                # Train split
+                from sklearn.model_selection import train_test_split
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                
+                # Define available models based on task type
+                available_models = {}
+                available_model_names = {}
+                
+                if is_classification:
+                    from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+                    from sklearn.linear_model import LogisticRegression
+                    from sklearn.svm import SVC
+                    from sklearn.neighbors import KNeighborsClassifier
+                    
+                    available_models = {
+                        "RandomForestClassifier": RandomForestClassifier(n_estimators=100, random_state=42),
+                        "LogisticRegression": LogisticRegression(max_iter=1000, random_state=42),
+                        "GradientBoostingClassifier": GradientBoostingClassifier(random_state=42),
+                        "SVC": SVC(probability=True, random_state=42),
+                        "KNeighborsClassifier": KNeighborsClassifier(n_neighbors=5)
+                    }
+                else:
+                    from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+                    from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
+                    
+                    available_models = {
+                        "RandomForestRegressor": RandomForestRegressor(n_estimators=100, random_state=42),
+                        "LinearRegression": LinearRegression(),
+                        "GradientBoostingRegressor": GradientBoostingRegressor(random_state=42),
+                        "Ridge": Ridge(random_state=42),
+                        "Lasso": Lasso(random_state=42),
+                        "ElasticNet": ElasticNet(random_state=42)
+                    }
+                
+                # Filter models based on user selection (if any)
+                if selected_models:
+                    models = [available_models[model_name] for model_name in selected_models if model_name in available_models]
+                    model_names = [f"{model_name}_{dataset_name}" for model_name in selected_models if model_name in available_models]
+                else:
+                    # Use all available models if none selected
+                    models = list(available_models.values())
+                    model_names = [f"{model_name}_{dataset_name}" for model_name in available_models.keys()]
+                
+                if not models:
+                    continue  # Skip this dataset if no valid models selected
+                
+                # Start distributed training
+                trained_models, training_metrics = train_multiple_models(
+                    models, X_train, y_train, X_test, y_test, model_names
+                )
+                
+                # Create Ray actors (NO disk storage - purely distributed)
+                for model_name, model in trained_models.items():
+                    # Create Ray actor with model in distributed memory
+                    try:
+                        actor = ModelActor.options(name=model_name, lifetime="detached").remote(model, model_name)
+                        actor.set_metrics.remote(training_metrics.get(model_name, {}))
+                        actor.set_training_data.remote(X_train, y_train, X_test, y_test)
+                        logger.info(f"Created Ray actor for model: {model_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to create actor for {model_name}: {e}")
+                
+                results[dataset_name] = {
+                    "models_trained": len(trained_models),
+                    "metrics": training_metrics,
+                    "model_names": list(trained_models.keys())
+                }
+            
+            return {"status": "training_completed", "results": results}
+            
+        except Exception as e:
+            logger.error(f"Training error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    # Cluster management endpoints
+    @app.get("/cluster/status")
+    async def cluster_status():
+        """Get Ray cluster status"""
+        try:
+            import ray
+            cluster_resources = ray.cluster_resources()
+            available_resources = ray.available_resources()
+            nodes = ray.nodes()
+            
+            return {
+                "cluster_resources": cluster_resources,
+                "available_resources": available_resources,
+                "nodes": len(nodes),
+                "node_details": nodes
+            }
+        except Exception as e:
+            return {"error": str(e), "status": "unavailable"}
+    
+    @app.post("/cluster/add_worker")
+    async def add_worker():
+        """Add a new worker to the cluster (placeholder - actual implementation depends on infrastructure)"""
+        # This would typically involve orchestration tools like Kubernetes or Docker Swarm
+        return {"message": "Worker addition requested (implementation depends on infrastructure)"}
+    
+    @app.post("/cluster/remove_worker")
+    async def remove_worker():
+        """Remove a worker from the cluster (placeholder - actual implementation depends on infrastructure)"""
+        # This would typically involve orchestration tools
+        return {"message": "Worker removal requested (implementation depends on infrastructure)"}
 
     @app.exception_handler(Exception)
     async def exception_handler(request: Request, exc: Exception):

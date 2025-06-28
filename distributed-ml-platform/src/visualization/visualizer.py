@@ -1,7 +1,6 @@
 """
-Visualization utilities for monitoring models and system performance
+Visualization utilities for monitoring models and system performance (in-memory only)
 """
-import os
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,28 +12,22 @@ from sklearn.metrics import roc_curve, auc
 
 logger = logging.getLogger(__name__)
 
-def plot_training_metrics(metrics_dict, output_dir='plots', save=True, show=True):
+def plot_training_metrics(metrics_dict, return_base64=False):
     """
-    Plot training metrics for multiple models
+    Plot training metrics for multiple models (in-memory only)
     
     Args:
         metrics_dict (dict): Dictionary mapping model names to metrics dictionaries or scalar metrics
-        output_dir (str): Directory to save plots
-        save (bool): Whether to save the plots to disk
-        show (bool): Whether to show the plots
+        return_base64 (bool): Whether to return base64 encoded images
         
     Returns:
-        list: Paths to saved plot files if save=True
+        dict: Dictionary with base64 encoded plot images if return_base64=True, else displays plots
     """
     if not metrics_dict:
         logger.warning("No metrics provided for visualization")
-        return []
+        return {}
         
-    saved_paths = []
-    
-    # Create output directory
-    if save:
-        os.makedirs(output_dir, exist_ok=True)
+    plot_images = {}
     
     # Handle case where metrics_dict values are scalar (not dictionaries)
     # Convert simple scalar metrics to a dictionary with a single 'performance' key
@@ -81,16 +74,16 @@ def plot_training_metrics(metrics_dict, output_dir='plots', save=True, show=True
     plt.legend()
     plt.tight_layout()
     
-    if save:
-        file_path = os.path.join(output_dir, 'model_performance_metrics.png')
-        plt.savefig(file_path)
-        saved_paths.append(file_path)
-        logger.info(f"Saved performance metrics plot to {file_path}")
-    
-    if show:
-        plt.show()
+    if return_base64:
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight')
+        buffer.seek(0)
+        plot_images['performance_metrics'] = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        logger.info("Generated performance metrics plot")
     else:
-        plt.close()
+        plt.show()
+    
+    plt.close()
     
     # Plot training time
     plt.figure(figsize=(10, 6))
@@ -103,40 +96,34 @@ def plot_training_metrics(metrics_dict, output_dir='plots', save=True, show=True
     plt.xticks(rotation=45)
     plt.tight_layout()
     
-    if save:
-        file_path = os.path.join(output_dir, 'training_times.png')
-        plt.savefig(file_path)
-        saved_paths.append(file_path)
-        logger.info(f"Saved training times plot to {file_path}")
-    
-    if show:
-        plt.show()
+    if return_base64:
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight')
+        buffer.seek(0)
+        plot_images['training_times'] = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        logger.info("Generated training times plot")
     else:
-        plt.close()
+        plt.show()
     
-    return saved_paths
+    plt.close()
+    
+    return plot_images
 
-def plot_model_comparison(metrics_dict, metric_name='accuracy', output_dir='plots', save=True, show=True):
+def plot_model_comparison(metrics_dict, metric_name='accuracy', return_base64=False):
     """
-    Plot comparison of a specific metric across models
+    Plot comparison of a specific metric across models (in-memory only)
     
     Args:
         metrics_dict (dict): Dictionary mapping model names to metrics dictionaries
         metric_name (str): Name of the metric to compare
-        output_dir (str): Directory to save plots
-        save (bool): Whether to save the plots to disk
-        show (bool): Whether to show the plots
+        return_base64 (bool): Whether to return base64 encoded image
         
     Returns:
-        str or None: Path to saved plot file if save=True
+        str or None: Base64 encoded image if return_base64=True, else displays plot
     """
     if not metrics_dict:
         logger.warning("No metrics provided for visualization")
         return None
-        
-    # Create output directory
-    if save:
-        os.makedirs(output_dir, exist_ok=True)
     
     # Extract metric values
     models = list(metrics_dict.keys())
@@ -151,39 +138,32 @@ def plot_model_comparison(metrics_dict, metric_name='accuracy', output_dir='plot
     plt.xticks(rotation=45)
     plt.tight_layout()
     
-    saved_path = None
-    if save:
-        file_path = os.path.join(output_dir, f'model_comparison_{metric_name}.png')
-        plt.savefig(file_path)
-        saved_path = file_path
-        logger.info(f"Saved model comparison plot to {file_path}")
-    
-    if show:
-        plt.show()
-    else:
+    if return_base64:
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight')
+        buffer.seek(0)
+        img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
         plt.close()
-    
-    return saved_path
+        logger.info(f"Generated model comparison plot for {metric_name}")
+        return img_base64
+    else:
+        plt.show()
+        plt.close()
+        return None
 
-def plot_inference_metrics(request_counts, latencies, output_dir='plots', save=True, show=True):
+def plot_inference_metrics(request_counts, latencies, return_base64=False):
     """
-    Plot inference metrics for models in production
+    Plot inference metrics for models in production (in-memory only)
     
     Args:
         request_counts (dict): Dictionary mapping model names to request counts
         latencies (dict): Dictionary mapping model names to average latencies
-        output_dir (str): Directory to save plots
-        save (bool): Whether to save the plots to disk
-        show (bool): Whether to show the plots
+        return_base64 (bool): Whether to return base64 encoded images
         
     Returns:
-        list: Paths to saved plot files if save=True
+        dict: Dictionary with base64 encoded plot images if return_base64=True, else displays plots
     """
-    saved_paths = []
-    
-    # Create output directory
-    if save:
-        os.makedirs(output_dir, exist_ok=True)
+    plot_images = {}
     
     # Plot request counts
     plt.figure(figsize=(10, 6))
@@ -195,16 +175,16 @@ def plot_inference_metrics(request_counts, latencies, output_dir='plots', save=T
     plt.gca().yaxis.set_major_locator(MaxNLocator(integer=True))
     plt.tight_layout()
     
-    if save:
-        file_path = os.path.join(output_dir, 'request_counts.png')
-        plt.savefig(file_path)
-        saved_paths.append(file_path)
-        logger.info(f"Saved request counts plot to {file_path}")
-    
-    if show:
-        plt.show()
+    if return_base64:
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight')
+        buffer.seek(0)
+        plot_images['request_counts'] = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        logger.info("Generated request counts plot")
     else:
-        plt.close()
+        plt.show()
+    
+    plt.close()
     
     # Plot latencies
     plt.figure(figsize=(10, 6))
@@ -215,18 +195,18 @@ def plot_inference_metrics(request_counts, latencies, output_dir='plots', save=T
     plt.xticks(rotation=45)
     plt.tight_layout()
     
-    if save:
-        file_path = os.path.join(output_dir, 'inference_latency.png')
-        plt.savefig(file_path)
-        saved_paths.append(file_path)
-        logger.info(f"Saved inference latency plot to {file_path}")
-    
-    if show:
-        plt.show()
+    if return_base64:
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight')
+        buffer.seek(0)
+        plot_images['inference_latency'] = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        logger.info("Generated inference latency plot")
     else:
-        plt.close()
+        plt.show()
     
-    return saved_paths
+    plt.close()
+    
+    return plot_images
 
 def plot_roc_curve_to_png(roc_data, model_name, return_base64=False):
     """

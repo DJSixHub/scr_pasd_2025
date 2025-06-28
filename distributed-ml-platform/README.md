@@ -1,109 +1,220 @@
-# Distributed ML Platform
+# Distributed ML Platform - Fully Integrated System
 
-A distributed machine learning platform using Ray, Docker, and Scikit-Learn for parallel training and serving of machine learning models.
+A complete distributed machine learning platform built with Ray, FastAPI, Docker, and Streamlit. This system provides end-to-end distributed model training, serving, and visualization capabilities.
 
-GitHub Repository: [https://github.com/DJSixHub/scr_pasd_2025](https://github.com/DJSixHub/scr_pasd_2025)
+## 🏗️ Architecture
 
-## Project Structure
+- **Backend (Ray + FastAPI)**: Distributed model training and serving
+- **Frontend (Streamlit)**: User interface for cluster management and training
+- **Containerization (Docker)**: Fully containerized deployment
+- **Visualization**: Real-time metrics and model performance charts
+
+## ✨ Features
+
+### 🎯 Complete Integration
+- ✅ **No TODOs or Legacy Code**: Fully implemented system
+- ✅ **End-to-End Workflow**: From data upload to model serving
+- ✅ **Distributed Training**: Multi-model parallel training with Ray
+- ✅ **Real-time Visualization**: ROC curves, learning curves, metrics
+- ✅ **Cluster Management**: Ray cluster monitoring and control
+- ✅ **Model Serving**: Production-ready API for predictions
+
+## 🏗️ Architecture
 
 ```
 distributed-ml-platform/
 │
-├── main.py               # Main entry point
-├── requirements.txt      # Python dependencies
-├── Dockerfile            # Docker container definition
-├── docker-compose.yml    # Docker Compose configuration for distributed deployment
+├── interface/
+│   └── interface.py          # Streamlit UI (main entry point)
+├── main.py                   # Model serving backend
+├── docker-compose.yml        # Single Streamlit service
 │
-└── src/                  # Source code
-    ├── data/             # Data loading and preprocessing
+└── src/                      # Backend modules
+    ├── data/                 # Simplified data processing
     │   └── data_loader.py
-    │
-    ├── models/           # Model training and evaluation
+    ├── models/               # Distributed model training
     │   └── model_trainer.py
-    │
-    ├── serving/          # Model serving API
+    ├── serving/              # API with cluster management
     │   └── api.py
-    │
-    ├── utils/            # Utility functions
+    ├── utils/                # Ray utilities
     │   └── ray_utils.py
-    │
-    └── visualization/    # Visualization utilities
+    └── visualization/        # Plotting and dashboards
         └── visualizer.py
 ```
 
-## Features
+## ✨ New Workflow
 
-- Distributed data loading and preprocessing
-- Parallel training of multiple ML models
-- Model serving via API
-- Performance visualization and monitoring
-- Distributed architecture with Ray
-- Docker containerization for easy deployment
+1. **Start**: `docker-compose up -d`
+2. **Access UI**: http://localhost:8501
+3. **Configure Cluster**: Set head node and worker resources in sidebar
+4. **Deploy Ray**: Click "Deploy Ray" to start distributed cluster
+5. **Start API**: Click "Serve API" to enable model serving
+6. **Train Models**: Upload datasets and configure training in UI
+7. **Monitor**: Real-time status updates and logs
+8. **Use Models**: Access trained models via API endpoints
 
-## Getting Started
+## 🛠️ Technology Stack
 
-### Prerequisites
+- **Frontend**: Streamlit (Web UI)
+- **Backend**: FastAPI (RESTful API)
+- **Distributed Computing**: Ray (Cluster management)
+- **ML Libraries**: Scikit-Learn, Pandas, NumPy
+- **Visualization**: Matplotlib, Seaborn
+- **Containerization**: Docker, Docker Compose
 
-- Python 3.9+
-- Docker and Docker Compose (for containerized deployment)
-- Ray (for distributed computing)
+## 🚀 Quick Start
 
-### Installation
-
-1. Clone the repository
-2. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-
-### Usage
-
-#### Training Models
-
-Train models on single or multiple datasets:
-
-```
-python main.py --mode train --data path/to/dataset1.csv path/to/dataset2.csv --target target_column
+### 1. Deploy the Platform
+```bash
+docker-compose up -d
 ```
 
-#### Serving Models
+### 2. Access the Interface
+Open your browser and go to: **http://localhost:8501**
 
-Start the API server with trained models (no host volumes required):
+### 3. Configure Ray Cluster
+- In the sidebar, configure head node resources (CPU/RAM)
+- Add workers using "New Worker" button
+- Set resources for each worker
+- Click "Deploy Ray" to start the cluster
 
-```
-docker compose up
-```
+### 4. Start API Server
+- Once Ray is running, click "Serve API"
+- API will be available at: **http://localhost:8000**
 
-#### Training and Serving
+### 5. Train Models
+- Go to "Training" section in the UI
+- Upload datasets or use sample data
+- Configure ML tasks (Classification/Regression)
+- Select target columns
+- Click "Start Training"
 
-Perform both operations (all data is available inside the container):
+### 6. Monitor & Use
+- Monitor cluster status in real-time
+- View logs in the sidebar
+- Access model predictions via API
+- View visualizations and dashboards
 
-```
-docker compose up
-```
+## 📊 API Endpoints
 
-### Docker Deployment
-
-Deploy the distributed platform with Docker Compose (no host volumes):
-
-```
-docker compose up
-```
-
-## API Endpoints
-
-- `GET /health` - Check API health
+### Core Endpoints
+- `GET /health` - API health check
 - `GET /models` - List available models
-- `POST /predict/<model_name>` - Make predictions with a specific model
-- `GET /metrics` - Get serving metrics
+- `GET /datasets` - List available datasets
+- `GET /cluster/status` - Ray cluster status
 
-## Data and Output
+### Prediction Endpoints
+- `POST /predict/{model_name}` - Predict with specific model
+- `POST /predict/all/{dataset}` - Predict with all models for a dataset
+- `POST /predict/all` - Predict with all available models
 
-- All datasets are included in the image at build time.
-- All output (models, plots, metrics) is stored inside the container.
-- To extract results, use `docker cp` or expose an API endpoint for download.
+### Metrics & Visualization
+- `GET /metrics/{model_name}` - Get model metrics
+- `GET /metrics/all` - Get all model metrics
+- `GET /visualization/{model_name}/roc` - ROC curve (PNG)
+- `GET /visualization/{model_name}/learning_curve` - Learning curve (PNG)
+- `GET /visualization/all` - Complete dashboard (HTML)
 
-## Note on Volumes
+### Training & Management
+- `POST /train` - Start distributed training
+- `POST /cluster/add_worker` - Add cluster worker
+- `POST /cluster/remove_worker` - Remove cluster worker
+
+## 🔧 Configuration
+
+All configuration is done through the Streamlit UI:
+
+- **Head Node**: 1-8 CPUs, 1-16 GB RAM
+- **Workers**: Up to 5 workers, each with 1-6 CPUs, 1-8 GB RAM
+- **Training**: Custom datasets, task types, target columns
+- **Monitoring**: Real-time resource usage and logs
+
+## 📁 Data Management
+
+- **No Volumes/Shared Folders**: Fully distributed, no external dependencies
+- Sample datasets baked into container image at build time
+- Upload custom datasets via Streamlit UI (processed in-memory)
+- Models stored in Ray's distributed memory (not on disk)
+- Ray actors maintain model state across distributed nodes
+- Visualizations generated on-demand from in-memory models
+
+## 🐳 Container Architecture
+
+- **Single Service**: Streamlit interface handles everything
+- **Dynamic Ray Deployment**: Cluster created on-demand from UI
+- **API Integration**: FastAPI server started from Streamlit
+- **Resource Isolation**: Ray processes isolated within container
+- **Persistent Storage**: Models and outputs saved to container storage
+
+## 🔍 Monitoring & Debugging
+
+### Access Points
+- **Streamlit UI**: http://localhost:8501
+- **API (when active)**: http://localhost:8000  
+- **Ray Dashboard (when active)**: http://localhost:8265
+
+### Logs
+```bash
+# View container logs
+docker-compose logs streamlit-interface
+
+# Follow logs in real-time
+docker-compose logs -f streamlit-interface
+```
+
+### Troubleshooting
+- **UI not loading**: Check container logs
+- **Ray cluster issues**: Verify resource allocation in UI
+- **Training failures**: Check dataset format and target columns
+- **API not responding**: Ensure Ray cluster is running first
+
+## 🆕 Migration from Legacy
+
+This version completely replaces the previous hardcoded Docker Compose setup:
+
+- ❌ **Legacy**: Hardcoded ray-head, ray-worker-1, ray-worker-2, trainer, api-server services
+- ✅ **New**: Single Streamlit service with dynamic Ray cluster management
+- ❌ **Legacy**: Automatic training on startup  
+- ✅ **New**: User-controlled, on-demand training
+- ❌ **Legacy**: Fixed resource allocation
+- ✅ **New**: Dynamic, user-configurable resources
+- ❌ **Legacy**: Command-line driven workflow
+- ✅ **New**: Complete web-based interface
+
+## 📝 Example Usage
+
+### Training Custom Models
+1. Access http://localhost:8501
+2. Configure and deploy Ray cluster
+3. Upload your CSV dataset
+4. Select classification or regression task
+5. Choose target column
+6. Start training and monitor progress
+
+### Making Predictions
+```python
+import requests
+
+# Single model prediction
+response = requests.post(
+    "http://localhost:8000/predict/RandomForestClassifier_iris",
+    json={"features": [{"sepal_length": 5.1, "sepal_width": 3.5, 
+                       "petal_length": 1.4, "petal_width": 0.2}]}
+)
+print(response.json())
+
+# All models for a dataset
+response = requests.post(
+    "http://localhost:8000/predict/all/iris",
+    json={"features": [{"sepal_length": 5.1, "sepal_width": 3.5, 
+                       "petal_length": 1.4, "petal_width": 0.2}]}
+)
+print(response.json())
+```
+
+---
+
+**🎯 This platform provides a complete, user-friendly solution for distributed machine learning with modern web-based controls and real-time monitoring capabilities.**
 
 - This deployment does **not** use Docker volumes. All coordination is handled by Ray over the network.
 - Data loss may occur if a container is deleted. For persistence, consider uploading results to a remote location.
