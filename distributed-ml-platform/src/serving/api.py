@@ -5,9 +5,12 @@ import logging
 import time
 import base64
 import io
+import os
+import subprocess
+import asyncio
 from typing import Dict, List, Any
 from pydantic import BaseModel
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from starlette.responses import JSONResponse
 import ray
@@ -26,6 +29,17 @@ class PredictionResponse(BaseModel):
     model: str
     predictions: List
     latency_ms: float
+
+class FileUploadRequest(BaseModel):
+    filename: str
+    content: str  # Base64 encoded file content
+    
+class FileUploadResponse(BaseModel):
+    filename: str
+    status: str
+    rows: int = None
+    columns: List[str] = None
+    preview: List[Dict[str, Any]] = None
     
 class ErrorResponse(BaseModel):
     error: str
@@ -557,6 +571,76 @@ def create_app(model_names):
 
     # NEW ENDPOINTS FOR STREAMLIT WORKFLOW
     
+    # File upload endpoint for distributed data ingestion
+    @app.post("/upload", response_model=FileUploadResponse)
+    async def upload_file(request: FileUploadRequest):
+        """Upload and process a file in a distributed manner"""
+        try:
+            import pandas as pd
+            import base64
+            import io
+            
+            # Decode base64 content
+            content_bytes = base64.b64decode(request.content)
+            
+            # Determine file type and read accordingly
+            filename_lower = request.filename.lower()
+            if filename_lower.endswith('.csv'):
+                df = pd.read_csv(io.StringIO(content_bytes.decode('utf-8')))
+            elif filename_lower.endswith('.json'):
+                df = pd.read_json(io.StringIO(content_bytes.decode('utf-8')))
+            else:
+                raise HTTPException(status_code=400, detail=f"Unsupported file type: {request.filename}")
+            
+            # Distribute data loading across Ray cluster
+            from src.data.data_loader import DataLoaderActor
+            
+            # Create a data loader actor for this file
+            loader_actor_name = f"data_loader_{request.filename.replace('.', '_')}"
+            loader_actor = DataLoaderActor.options(name=loader_actor_name).remote()
+            
+            # Store the data in the distributed actor
+            ray.get(loader_actor.load_data.remote(df.to_dict('records')))
+            
+            # Generate preview
+            preview = df.head(5).to_dict('records')
+            
+            return FileUploadResponse(
+                filename=request.filename,
+                status="uploaded_and_distributed",
+                rows=len(df),
+                columns=list(df.columns),
+                preview=preview
+            )
+            
+        except Exception as e:
+            logger.error(f"Error uploading file {request.filename}: {e}")
+            raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+    
+    @app.get("/uploaded_files")
+    async def list_uploaded_files():
+        """List all uploaded files stored in Ray cluster"""
+        try:
+            import ray.util
+            uploaded_files = []
+            for actor_name in ray.util.list_named_actors():
+                if actor_name.startswith('data_loader_'):
+                    filename = actor_name.replace('data_loader_', '').replace('_', '.')
+                    try:
+                        actor = ray.get_actor(actor_name)
+                        data_info = ray.get(actor.get_data_info.remote())
+                        uploaded_files.append({
+                            'filename': filename,
+                            'actor_name': actor_name,
+                            'rows': data_info.get('rows', 0),
+                            'columns': data_info.get('columns', [])
+                        })
+                    except Exception:
+                        pass
+            return {'uploaded_files': uploaded_files}
+        except Exception as e:
+            return {'error': str(e), 'uploaded_files': []}
+    
     # Training endpoint (on-demand)
     @app.post("/train")
     async def train_models(request: Dict[str, Any]):
@@ -670,36 +754,520 @@ def create_app(model_names):
             logger.error(f"Training error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
     
+    @app.post("/train_uploaded")
+    async def train_uploaded_files(request: Dict[str, Any]):
+        """Start distributed training with uploaded files from Ray actors"""
+        try:
+            file_configs = request.get('file_configs', {})  # {filename: {task, target, models}}
+            
+            if not file_configs:
+                raise HTTPException(status_code=400, detail="Missing required field: file_configs")
+            
+            # Import training function
+            from src.models.model_trainer import train_multiple_models, ModelActor
+            from src.data.data_loader import DataLoaderActor
+            import pandas as pd
+            import numpy as np
+            
+            # Process each uploaded file
+            results = {}
+            for filename, config in file_configs.items():
+                task = config.get('task')
+                target = config.get('target')
+                selected_models = config.get('models', [])
+                
+                if not task or not target:
+                    continue  # Skip files without task/target
+                
+                # Get data from Ray actor
+                actor_name = f"data_loader_{filename.replace('.', '_')}"
+                try:
+                    loader_actor = ray.get_actor(actor_name)
+                    dataset_records = ray.get(loader_actor.get_data.remote())
+                    
+                    if not dataset_records:
+                        continue  # Skip if no data
+                    
+                    df = pd.DataFrame(dataset_records)
+                    
+                except Exception as e:
+                    logger.error(f"Failed to get data for {filename}: {e}")
+                    continue
+                
+                # Convert task name to classification/regression
+                is_classification = task == "Clasificación"
+                
+                # Split features and target
+                if target not in df.columns:
+                    logger.error(f"Target column '{target}' not found in dataset '{filename}'")
+                    continue
+                
+                X = df.drop(target, axis=1)
+                y = df[target]
+                
+                # Convert categorical features to numeric
+                X = pd.get_dummies(X)
+                
+                # Train split
+                from sklearn.model_selection import train_test_split
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                
+                # Define available models based on task type
+                available_models = {}
+                
+                if is_classification:
+                    from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+                    from sklearn.linear_model import LogisticRegression
+                    from sklearn.svm import SVC
+                    from sklearn.neighbors import KNeighborsClassifier
+                    
+                    available_models = {
+                        "RandomForestClassifier": RandomForestClassifier(n_estimators=100, random_state=42),
+                        "LogisticRegression": LogisticRegression(max_iter=1000, random_state=42),
+                        "GradientBoostingClassifier": GradientBoostingClassifier(random_state=42),
+                        "SVC": SVC(probability=True, random_state=42),
+                        "KNeighborsClassifier": KNeighborsClassifier(n_neighbors=5)
+                    }
+                else:
+                    from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+                    from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
+                    
+                    available_models = {
+                        "RandomForestRegressor": RandomForestRegressor(n_estimators=100, random_state=42),
+                        "LinearRegression": LinearRegression(),
+                        "GradientBoostingRegressor": GradientBoostingRegressor(random_state=42),
+                        "Ridge": Ridge(random_state=42),
+                        "Lasso": Lasso(random_state=42),
+                        "ElasticNet": ElasticNet(random_state=42)
+                    }
+                
+                # Filter models based on user selection (if any)
+                dataset_name = filename.replace('.csv', '').replace('.json', '')
+                if selected_models:
+                    models = [available_models[model_name] for model_name in selected_models if model_name in available_models]
+                    model_names = [f"{model_name}_{dataset_name}" for model_name in selected_models if model_name in available_models]
+                else:
+                    # Use all available models if none selected
+                    models = list(available_models.values())
+                    model_names = [f"{model_name}_{dataset_name}" for model_name in available_models.keys()]
+                
+                if not models:
+                    continue  # Skip this dataset if no valid models selected
+                
+                # Start distributed training
+                trained_models, training_metrics = train_multiple_models(
+                    models, X_train, y_train, X_test, y_test, model_names
+                )
+                
+                # Create Ray actors (NO disk storage - purely distributed)
+                for model_name, model in trained_models.items():
+                    # Create Ray actor with model in distributed memory
+                    try:
+                        actor = ModelActor.options(name=model_name, lifetime="detached").remote(model, model_name)
+                        actor.set_metrics.remote(training_metrics.get(model_name, {}))
+                        actor.set_training_data.remote(X_train, y_train, X_test, y_test)
+                        logger.info(f"Created Ray actor for model: {model_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to create actor for {model_name}: {e}")
+                
+                results[filename] = {
+                    "models_trained": len(trained_models),
+                    "metrics": training_metrics,
+                    "model_names": list(trained_models.keys())
+                }
+            
+            return {"status": "training_completed", "results": results}
+            
+        except Exception as e:
+            logger.error(f"Training error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
     # Cluster management endpoints
     @app.get("/cluster/status")
     async def cluster_status():
-        """Get Ray cluster status"""
+        """Get Ray cluster status with better error handling"""
         try:
             import ray
+            
+            # Check if Ray is initialized
+            if not ray.is_initialized():
+                return {
+                    "error": "Ray has not been started yet. You can start Ray with 'ray.init()'.",
+                    "status": "not_initialized",
+                    "suggestion": "Ray cluster is starting up or not properly initialized"
+                }
+            
+            # Get cluster information
             cluster_resources = ray.cluster_resources()
             available_resources = ray.available_resources()
             nodes = ray.nodes()
             
+            # Additional cluster metrics
+            active_nodes = len([node for node in nodes if node['Alive']])
+            total_cpus = cluster_resources.get('CPU', 0)
+            available_cpus = available_resources.get('CPU', 0)
+            total_memory = cluster_resources.get('memory', 0)
+            available_memory = available_resources.get('memory', 0)
+            
             return {
+                "status": "healthy",
                 "cluster_resources": cluster_resources,
                 "available_resources": available_resources,
                 "nodes": len(nodes),
-                "node_details": nodes
+                "active_nodes": active_nodes,
+                "node_details": nodes,
+                "summary": {
+                    "total_cpus": total_cpus,
+                    "available_cpus": available_cpus,
+                    "cpu_utilization": round((total_cpus - available_cpus) / total_cpus * 100, 2) if total_cpus > 0 else 0,
+                    "total_memory_gb": round(total_memory / 1e9, 2),
+                    "available_memory_gb": round(available_memory / 1e9, 2),
+                    "memory_utilization": round((total_memory - available_memory) / total_memory * 100, 2) if total_memory > 0 else 0
+                }
             }
         except Exception as e:
-            return {"error": str(e), "status": "unavailable"}
+            logger.error(f"Error getting cluster status: {e}")
+            return {
+                "error": str(e), 
+                "status": "error",
+                "suggestion": "Check if Ray cluster is properly running and accessible"
+            }
+    
+    import os
+    import subprocess
+    import asyncio
+    
+    def get_docker_compose_path():
+        """Get the path to docker-compose.yml file"""
+        # Navigate up from src/serving/api.py to project root
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(current_dir))
+        return project_root
+    
+    async def get_current_worker_count():
+        """Get current number of Ray worker containers"""
+        try:
+            project_root = get_docker_compose_path()
+            result = subprocess.run(
+                ["docker", "compose", "ps", "--format", "json"],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            import json
+            containers = []
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    containers.append(json.loads(line))
+            
+            # Count containers with ray_worker in service name
+            worker_count = len([c for c in containers if 'ray_worker' in c.get('Service', '') and c.get('State') == 'running'])
+            return worker_count
+        except Exception as e:
+            logger.error(f"Error getting worker count: {e}")
+            return None
+    
+    async def scale_ray_workers(target_count):
+        """Scale Ray workers to target count using docker compose"""
+        try:
+            project_root = get_docker_compose_path()
+            
+            # Use docker compose scale command
+            process = await asyncio.create_subprocess_exec(
+                "docker", "compose", "up", "-d", "--scale", f"ray_worker={target_count}",
+                cwd=project_root,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode != 0:
+                error_msg = stderr.decode() if stderr else "Unknown docker compose error"
+                logger.error(f"Docker compose scaling failed: {error_msg}")
+                return False, error_msg
+            
+            # Wait for Ray to register changes
+            await asyncio.sleep(5)
+            
+            # Verify the scaling worked by checking Ray cluster
+            import ray
+            for attempt in range(15):  # Wait up to 15 seconds
+                try:
+                    nodes = ray.nodes()
+                    alive_nodes = [n for n in nodes if n['Alive']]
+                    # Head node + workers should equal target_count + 1
+                    if len(alive_nodes) >= target_count + 1:
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(1)
+            
+            return True, f"Successfully scaled to {target_count} workers"
+            
+        except Exception as e:
+            logger.error(f"Error scaling workers: {e}")
+            return False, str(e)
     
     @app.post("/cluster/add_worker")
     async def add_worker():
-        """Add a new worker to the cluster (placeholder - actual implementation depends on infrastructure)"""
-        # This would typically involve orchestration tools like Kubernetes or Docker Swarm
-        return {"message": "Worker addition requested (implementation depends on infrastructure)"}
+        """Add a new Ray worker container to the cluster (REAL Docker Compose scaling)"""
+        try:
+            current_count = await get_current_worker_count()
+            if current_count is None:
+                return {"error": "Could not determine current worker count", "success": False}
+            
+            new_count = current_count + 1
+            logger.info(f"Adding Ray worker: {current_count} -> {new_count}")
+            
+            success, message = await scale_ray_workers(new_count)
+            
+            if success:
+                # Verify Ray cluster sees the new worker
+                import ray
+                if ray.is_initialized():
+                    nodes = ray.nodes()
+                    alive_workers = len([n for n in nodes if n['Alive']]) - 1  # Subtract head node
+                    return {
+                        "success": True,
+                        "message": message,
+                        "previous_workers": current_count,
+                        "current_workers": new_count,
+                        "ray_cluster_workers": alive_workers
+                    }
+                else:
+                    return {"success": True, "message": message, "note": "Ray not initialized to verify"}
+            else:
+                return {"error": message, "success": False}
+                
+        except Exception as e:
+            logger.error(f"Error adding Ray worker: {e}")
+            return {"error": str(e), "success": False}
     
     @app.post("/cluster/remove_worker")
     async def remove_worker():
-        """Remove a worker from the cluster (placeholder - actual implementation depends on infrastructure)"""
-        # This would typically involve orchestration tools
-        return {"message": "Worker removal requested (implementation depends on infrastructure)"}
+        """Remove a Ray worker container from the cluster (REAL Docker Compose scaling)"""
+        try:
+            current_count = await get_current_worker_count()
+            if current_count is None:
+                return {"error": "Could not determine current worker count", "success": False}
+            
+            if current_count <= 1:
+                return {"error": "Cannot remove the last worker - minimum 1 worker required", "success": False}
+            
+            new_count = current_count - 1
+            logger.info(f"Removing Ray worker: {current_count} -> {new_count}")
+            
+            success, message = await scale_ray_workers(new_count)
+            
+            if success:
+                # Verify Ray cluster sees the change
+                import ray
+                if ray.is_initialized():
+                    nodes = ray.nodes()
+                    alive_workers = len([n for n in nodes if n['Alive']]) - 1  # Subtract head node
+                    return {
+                        "success": True,
+                        "message": message,
+                        "previous_workers": current_count,
+                        "current_workers": new_count,
+                        "ray_cluster_workers": alive_workers
+                    }
+                else:
+                    return {"success": True, "message": message, "note": "Ray not initialized to verify"}
+            else:
+                return {"error": message, "success": False}
+                
+        except Exception as e:
+            logger.error(f"Error removing Ray worker: {e}")
+            return {"error": str(e), "success": False}
+
+    @app.post("/cluster/pause_worker/{worker_number}")
+    async def pause_worker(worker_number: int):
+        """Pause a specific Ray worker container by stopping it"""
+        try:
+            project_root = get_docker_compose_path()
+            
+            # Get all ray_worker containers
+            result = subprocess.run(
+                ["docker", "compose", "ps", "--format", "json"],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            import json
+            containers = []
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    containers.append(json.loads(line))
+            
+            # Find ray_worker containers sorted by name
+            ray_workers = sorted([c for c in containers if 'ray_worker' in c.get('Service', '')], 
+                               key=lambda x: x.get('Name', ''))
+            
+            if worker_number < 1 or worker_number > len(ray_workers):
+                return {"error": f"Worker {worker_number} not found. Available workers: 1-{len(ray_workers)}", "success": False}
+            
+            # Get the specific worker container
+            target_worker = ray_workers[worker_number - 1]
+            container_name = target_worker.get('Name')
+            
+            # Stop the specific container
+            process = await asyncio.create_subprocess_exec(
+                "docker", "stop", container_name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode != 0:
+                error_msg = stderr.decode() if stderr else "Unknown docker error"
+                logger.error(f"Failed to pause worker {worker_number}: {error_msg}")
+                return {"error": f"Failed to pause worker {worker_number}: {error_msg}", "success": False}
+            
+            return {
+                "success": True,
+                "message": f"Worker {worker_number} ({container_name}) paused successfully",
+                "worker_number": worker_number,
+                "container_name": container_name
+            }
+            
+        except Exception as e:
+            logger.error(f"Error pausing worker {worker_number}: {e}")
+            return {"error": str(e), "success": False}
+    
+    @app.post("/cluster/delete_worker/{worker_number}")
+    async def delete_worker(worker_number: int):
+        """Delete a specific Ray worker container completely"""
+        try:
+            project_root = get_docker_compose_path()
+            
+            # Get all ray_worker containers
+            result = subprocess.run(
+                ["docker", "compose", "ps", "--format", "json"],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            import json
+            containers = []
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    containers.append(json.loads(line))
+            
+            # Find ray_worker containers sorted by name
+            ray_workers = sorted([c for c in containers if 'ray_worker' in c.get('Service', '')], 
+                               key=lambda x: x.get('Name', ''))
+            
+            if worker_number < 1 or worker_number > len(ray_workers):
+                return {"error": f"Worker {worker_number} not found. Available workers: 1-{len(ray_workers)}", "success": False}
+            
+            # Get the specific worker container
+            target_worker = ray_workers[worker_number - 1]
+            container_name = target_worker.get('Name')
+            
+            # Stop and remove the specific container
+            stop_process = await asyncio.create_subprocess_exec(
+                "docker", "stop", container_name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await stop_process.communicate()
+            
+            remove_process = await asyncio.create_subprocess_exec(
+                "docker", "rm", container_name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await remove_process.communicate()
+            
+            if remove_process.returncode != 0:
+                error_msg = stderr.decode() if stderr else "Unknown docker error"
+                logger.error(f"Failed to delete worker {worker_number}: {error_msg}")
+                return {"error": f"Failed to delete worker {worker_number}: {error_msg}", "success": False}
+            
+            return {
+                "success": True,
+                "message": f"Worker {worker_number} ({container_name}) deleted successfully",
+                "worker_number": worker_number,
+                "container_name": container_name
+            }
+            
+        except Exception as e:
+            logger.error(f"Error deleting worker {worker_number}: {e}")
+            return {"error": str(e), "success": False}
+    
+    @app.get("/cluster/workers")
+    async def get_workers():
+        """Get detailed information about all Ray worker containers"""
+        try:
+            project_root = get_docker_compose_path()
+            
+            # Get all containers
+            result = subprocess.run(
+                ["docker", "compose", "ps", "--format", "json"],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            import json
+            containers = []
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    containers.append(json.loads(line))
+            
+            # Find ray_worker containers sorted by name
+            ray_workers = sorted([c for c in containers if 'ray_worker' in c.get('Service', '')], 
+                               key=lambda x: x.get('Name', ''))
+            
+            # Get detailed info for each worker
+            worker_details = []
+            for i, worker in enumerate(ray_workers, 1):
+                # Get container stats
+                stats_result = subprocess.run(
+                    ["docker", "stats", "--no-stream", "--format", "table {{.CPUPerc}}\t{{.MemUsage}}", worker.get('Name')],
+                    capture_output=True,
+                    text=True
+                )
+                
+                cpu_usage = "N/A"
+                memory_usage = "N/A"
+                if stats_result.returncode == 0 and stats_result.stdout:
+                    lines = stats_result.stdout.strip().split('\n')
+                    if len(lines) > 1:  # Skip header
+                        parts = lines[1].split('\t')
+                        if len(parts) >= 2:
+                            cpu_usage = parts[0]
+                            memory_usage = parts[1]
+                
+                worker_details.append({
+                    "number": i,
+                    "name": worker.get('Name'),
+                    "status": worker.get('State'),
+                    "service": worker.get('Service'),
+                    "cpu_usage": cpu_usage,
+                    "memory_usage": memory_usage
+                })
+            
+            return {
+                "success": True,
+                "workers": worker_details,
+                "total_workers": len(worker_details)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting worker details: {e}")
+            return {"error": str(e), "success": False}
 
     @app.exception_handler(Exception)
     async def exception_handler(request: Request, exc: Exception):

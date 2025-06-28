@@ -12,3 +12,4 @@ protobuf==4.23.4  # Pin for Ray Serve 2.7.x compatibility
 streamlit==1.28.2  # For the user interface
 uvicorn==0.18.3  # ASGI server for FastAPI
 psutil==5.9.5  # For system resource monitoring
+async_timeout==4.0.3  # Required for Ray dashboard

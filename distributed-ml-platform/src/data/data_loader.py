@@ -5,6 +5,7 @@ import os
 import pandas as pd
 import numpy as np
 import logging
+import ray
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
@@ -117,4 +118,50 @@ def preprocess_dataset(df, target_col=None, test_size=0.2, random_state=42, scal
             
     except Exception as e:
         logger.error(f"Error preprocessing dataset: {e}")
+        return None
+
+
+@ray.remote
+class DataLoaderActor:
+    """
+    Ray actor for distributed data loading and storage
+    """
+    
+    def __init__(self):
+        self.data = None
+        self.metadata = {}
+        logger.info("DataLoaderActor initialized")
+    
+    def load_data(self, records):
+        """Load data from records (list of dicts)"""
+        try:
+            import pandas as pd
+            self.data = pd.DataFrame(records)
+            self.metadata = {
+                'rows': len(self.data),
+                'columns': list(self.data.columns),
+                'loaded_at': pd.Timestamp.now().isoformat()
+            }
+            logger.info(f"Data loaded: {self.metadata['rows']} rows, {len(self.metadata['columns'])} columns")
+            return True
+        except Exception as e:
+            logger.error(f"Error loading data: {e}")
+            return False
+    
+    def get_data(self):
+        """Get the stored data"""
+        return self.data.to_dict('records') if self.data is not None else None
+    
+    def get_data_info(self):
+        """Get metadata about the stored data"""
+        return self.metadata
+    
+    def get_columns(self):
+        """Get column names"""
+        return list(self.data.columns) if self.data is not None else []
+    
+    def get_sample(self, n=5):
+        """Get a sample of the data"""
+        if self.data is not None:
+            return self.data.head(n).to_dict('records')
         return None
