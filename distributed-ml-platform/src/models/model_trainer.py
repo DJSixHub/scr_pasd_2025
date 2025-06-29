@@ -9,6 +9,7 @@ from time import time
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, mean_squared_error
 import random
 import socket
+from sklearn.neighbors import KNeighborsClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,17 @@ def train_model(model, X_train, y_train, X_test, y_test, model_name=None):
     start_time = time()
     
     try:
+        # Ensure correct input type for KNeighborsClassifier to avoid numpy Flags error
+        if isinstance(model, KNeighborsClassifier):
+            if hasattr(X_train, 'values'):
+                X_train = X_train.values
+            if hasattr(X_test, 'values'):
+                X_test = X_test.values
+            if hasattr(y_train, 'values'):
+                y_train = y_train.values
+            if hasattr(y_test, 'values'):
+                y_test = y_test.values
+
         # Train the model
         model.fit(X_train, y_train)
         training_time = time() - start_time
@@ -245,6 +257,21 @@ class ModelActor:
             'X_test': X_test,
             'y_test': y_test
         }
+
+    def get_model_info(self):
+        """
+        Return model info for API listing (/models endpoint).
+        
+        Returns:
+            dict: Model info including name, algorithm, metrics, and features if available.
+        """
+        info = {
+            'name': self.model_name,
+            'algorithm': type(self.model).__name__,
+            'metrics': self.metrics,
+            'features': list(self.model.feature_names_in_) if hasattr(self.model, 'feature_names_in_') else None
+        }
+        return info
 
     def generate_roc_curve(self):
         """

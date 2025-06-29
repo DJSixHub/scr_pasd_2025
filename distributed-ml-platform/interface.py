@@ -10,7 +10,7 @@ st.set_page_config(page_title="Distributed ML Platform Interface", layout="wide"
 
 # --- CLUSTER MANAGEMENT ---
 st.sidebar.title("Menú principal")
-section = st.sidebar.radio("Selecciona una sección", ["Cluster", "Training", "Modelos y Métricas", "Predicción"])
+section = st.sidebar.radio("Selecciona una sección", ["Cluster", "Training", "Predicción"])
 
 if 'cluster' not in st.session_state:
     st.session_state['cluster'] = {
@@ -195,18 +195,12 @@ if section == "Training":
     st.header("🚀 Entrenamiento Distribuido de Modelos ML")
     st.markdown("Suba archivos CSV/JSON para procesamiento y entrenamiento distribuido en el clúster Ray")
     
-    # Check for existing trained models
+    # Check for existing trained models (no longer shown in UI, but still fetched for prediction section)
     try:
         models_response = requests.get('http://localhost:8000/models', timeout=5)
         if models_response.status_code == 200:
             existing_models = models_response.json()
-            if existing_models:
-                st.info(f"✅ Found {len(existing_models)} previously trained models. You can view them in the 'Modelos y Métricas' section or train new models below.")
-                
-                # Show existing models summary
-                with st.expander("🔍 View Previously Trained Models"):
-                    for model in existing_models:
-                        st.write(f"- **{model.get('name', 'Unknown')}** ({model.get('algorithm', 'N/A')}) - Accuracy: {model.get('accuracy', 'N/A')}")
+            # No UI display here; models are used in prediction section only
     except Exception:
         pass  # If check fails, continue normally
     
@@ -445,17 +439,14 @@ if section == "Training":
                 test_size = st.slider("Test Size", 0.1, 0.5, 0.2, key=f"test_size_{filename}")
             with col2:
                 random_state = st.number_input("Random State", 1, 1000, 42, key=f"random_state_{filename}")
-            with col3:
-                cross_val_folds = st.number_input("Cross Validation Folds", 3, 10, 5, key=f"cv_folds_{filename}")
-            
-            # Store configuration
+
+            # Store configuration (cross_val_folds removed)
             st.session_state['file_configs'][filename] = {
                 'task_type': task_type,
                 'target_column': target_column,
                 'algorithms': selected_algorithms,
                 'test_size': test_size,
-                'random_state': random_state,
-                'cross_val_folds': cross_val_folds
+                'random_state': random_state
             }
             
             # Show current configuration status
@@ -520,8 +511,7 @@ if section == "Training":
                                     "target_column": config['target_column'],
                                     "algorithms": api_algorithms,
                                     "test_size": config['test_size'],
-                                    "random_state": config['random_state'],
-                                    "cross_val_folds": config['cross_val_folds']
+                                    "random_state": config['random_state']
                                 }
                         
                         # Send batch training request
@@ -674,150 +664,139 @@ if section == "Training":
         else:
             st.info("💡 Primero selecciona y procesa archivos CSV o JSON para continuar con la configuración de entrenamiento.")
 
-# --- SECTION: MODELS AND METRICS ---
-if section == "Modelos y Métricas":
-    pass  # Metrics section removed. All metrics and visualizations are now in the Training section.
+
 
 # --- SECTION: PREDICTION ---
 if section == "Predicción":
     st.header("🔮 Model Prediction Interface")
-    
-    # Get list of trained models
+    # Get uploaded files and trained models
     try:
-        response = requests.get('http://localhost:8000/models', timeout=10)
-        if response.status_code == 200:
-            models = response.json()
-            
-            if models:
-                # Model selection
-                model_names = [model['name'] for model in models]
-                selected_model = st.selectbox("Select a trained model:", model_names)
-                
-                if selected_model:
-                    # Get model details
-                    selected_model_info = next((m for m in models if m['name'] == selected_model), None)
-                    
-                    if selected_model_info:
-                        st.write(f"**Selected Model:** {selected_model}")
-                        st.write(f"**Algorithm:** {selected_model_info.get('algorithm', 'N/A')}")
-                        st.write(f"**Task Type:** {selected_model_info.get('task_type', 'N/A')}")
-                        
-                        # Feature input method selection
-                        input_method = st.radio(
-                            "Choose input method:",
-                            ["Manual Input", "Upload CSV File"]
-                        )
-                        
-                        if input_method == "Manual Input":
-                            st.subheader("Enter feature values manually:")
-                            
-                            # Get feature names from model (this would need to be stored during training)
-                            st.info("💡 Enter feature values based on your trained model's expected input format")
-                            
-                            # Simple text area for JSON input
-                            feature_input = st.text_area(
-                                "Enter features as JSON:",
-                                placeholder='{"feature1": 1.0, "feature2": 2.0, "feature3": "category_a"}',
-                                help="Enter feature values in JSON format"
-                            )
-                            
-                            if st.button("🔮 Make Prediction") and feature_input:
-                                try:
-                                    # Parse JSON input
-                                    features = json.loads(feature_input)
-                                    
-                                    # Make prediction request
+        files_response = requests.get('http://localhost:8000/uploaded_files', timeout=10)
+        models_response = requests.get('http://localhost:8000/models', timeout=10)
+        if files_response.status_code == 200 and models_response.status_code == 200:
+            files_data = files_response.json()
+            models_data = models_response.json()
+            # Build dataset-to-model mapping (robust: match dataset part to uploaded file base name)
+            dataset_to_models = {}
+            model_to_features = {}
+            # Build a set of uploaded file base names (no extension)
+            uploaded_files_list = files_data.get('uploaded_files', [])
+            uploaded_basenames = set()
+            filename_map = {}  # base name -> full filename
+            for f in uploaded_files_list:
+                base = f['filename'].replace('.csv','').replace('.json','')
+                uploaded_basenames.add(base)
+                filename_map[base] = f['filename']
+
+            for model in models_data:
+                model_name = model.get('name') or model.get('model_id') or model.get('model_name')
+                if not model_name:
+                    continue
+                # Try to extract dataset part: match from rightmost underscore, but check if it matches any uploaded base name
+                parts = model_name.split('_')
+                matched_dataset = None
+                # Try all possible suffixes (from rightmost underscore to left)
+                for i in range(1, len(parts)):
+                    candidate = '_'.join(parts[i:])
+                    if candidate in uploaded_basenames:
+                        matched_dataset = candidate
+                        break
+                # If not found, try last part
+                if not matched_dataset and len(parts) > 1 and parts[-1] in uploaded_basenames:
+                    matched_dataset = parts[-1]
+                # If still not found, try full model name (for legacy)
+                if not matched_dataset and model_name in uploaded_basenames:
+                    matched_dataset = model_name
+                # If still not found, skip (model not mapped to any uploaded dataset)
+                if not matched_dataset:
+                    continue
+                dataset_to_models.setdefault(matched_dataset, []).append(model_name)
+                if 'features' in model:
+                    model_to_features[model_name] = model['features']
+
+            # Get available datasets (intersection with uploaded files)
+            available_datasets = [filename_map[ds] for ds in dataset_to_models if ds in filename_map]
+            if not available_datasets:
+                st.info("� No datasets with trained models available. Train some models first in the Training section.")
+            else:
+                selected_dataset = st.selectbox("Select a dataset:", available_datasets)
+                dataset_key = selected_dataset.replace('.csv','').replace('.json','')
+                # --- Robust preview: fetch from backend preview endpoint ---
+                preview_data = None
+                preview_columns = None
+                preview_error = None
+                try:
+                    preview_resp = requests.get(f'http://localhost:8000/dataset_preview?dataset={selected_dataset}', timeout=10)
+                    if preview_resp.status_code == 200:
+                        preview_json = preview_resp.json()
+                        preview_data = preview_json.get('preview', [])
+                        # Try to infer columns from preview or uploaded_files
+                        if preview_data:
+                            preview_columns = list(preview_data[0].keys())
+                        else:
+                            # fallback: get columns from uploaded_files
+                            dataset_info = next((f for f in files_data.get('uploaded_files', []) if f['filename'] == selected_dataset), None)
+                            if dataset_info:
+                                preview_columns = dataset_info.get('columns', [])
+                        preview_error = preview_json.get('error')
+                    else:
+                        preview_error = f"Backend error: {preview_resp.text}"
+                except Exception as e:
+                    preview_error = f"Preview fetch error: {e}"
+
+                st.write(f"**Preview for {selected_dataset}:**")
+                if preview_data and preview_columns:
+                    preview_df = pd.DataFrame(preview_data, columns=preview_columns)
+                    st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                elif preview_error:
+                    st.info(f"No preview available: {preview_error}")
+                else:
+                    st.info("No preview available for this dataset.")
+
+                # Show models trained on this dataset
+                models_for_dataset = dataset_to_models.get(dataset_key, [])
+                if not models_for_dataset:
+                    st.warning("No models trained on this dataset.")
+                else:
+                    selected_models = st.multiselect("Select model(s) to use for prediction:", models_for_dataset, default=models_for_dataset[:1])
+                    # Feature input UI (side-by-side)
+                    st.markdown("**Enter feature values for prediction:**")
+                    # Build list of features (skip target)
+                    # Use preview_columns if available, else fallback to dataset_info columns
+                    input_features = [col for col in (preview_columns if preview_columns else []) if col.lower() != 'target']
+                    feature_inputs = {}
+                    # Use columns for side-by-side input fields
+                    cols = st.columns(len(input_features) if input_features else 1)
+                    for i, col in enumerate(input_features):
+                        with cols[i]:
+                            feature_inputs[col] = st.text_input(f"{col}", key=f"predict_{col}_{selected_dataset}")
+                    if st.button("🔮 Predict", use_container_width=True):
+                        # Prepare feature dict for prediction
+                        try:
+                            features = {k: (float(v) if v.replace('.','',1).isdigit() else v) for k,v in feature_inputs.items() if v != ''}
+                            if not features:
+                                st.warning("Please enter values for at least one feature.")
+                            else:
+                                # Show predictions for each selected model
+                                for model_name in selected_models:
                                     prediction_request = {
-                                        "model_name": selected_model,
+                                        "model_name": model_name,
                                         "features": features
                                     }
-                                    
                                     prediction_response = requests.post(
                                         'http://localhost:8000/predict',
                                         json=prediction_request,
                                         timeout=30
                                     )
-                                    
                                     if prediction_response.status_code == 200:
                                         prediction = prediction_response.json()
-                                        st.success(f"✅ Prediction: {prediction.get('prediction', 'N/A')}")
-                                        
-                                        if 'probability' in prediction:
-                                            try:
-                                                prob_float = float(prediction['probability'])
-                                                st.info(f"🎯 Confidence: {prob_float:.3f}")
-                                            except (ValueError, TypeError):
-                                                st.info(f"🎯 Confidence: {prediction['probability']}")
+                                        st.success(f"Model `{model_name}` prediction: {prediction.get('prediction', 'N/A')}")
                                     else:
-                                        st.error(f"❌ Prediction failed: {prediction_response.text}")
-                                        
-                                except json.JSONDecodeError:
-                                    st.error("❌ Invalid JSON format. Please check your input.")
-                                except Exception as e:
-                                    st.error(f"❌ Error: {e}")
-                        
-                        else:  # Upload CSV File
-                            st.subheader("Upload CSV file for batch predictions:")
-                            
-                            uploaded_file = st.file_uploader(
-                                "Choose a CSV file",
-                                type=['csv'],
-                                help="Upload a CSV file with the same feature columns as your training data"
-                            )
-                            
-                            if uploaded_file is not None:
-                                # Read and display file preview
-                                df = pd.read_csv(uploaded_file)
-                                st.write("**File Preview:**")
-                                st.dataframe(df.head(), use_container_width=True)
-                                
-                                if st.button("🔮 Make Batch Predictions"):
-                                    try:
-                                        # Convert DataFrame to JSON
-                                        data_json = df.to_json(orient='records')
-                                        
-                                        # Make batch prediction request
-                                        batch_request = {
-                                            "model_name": selected_model,
-                                            "data": json.loads(data_json)
-                                        }
-                                        
-                                        batch_response = requests.post(
-                                            'http://localhost:8000/predict_batch',
-                                            json=batch_request,
-                                            timeout=60
-                                        )
-                                        
-                                        if batch_response.status_code == 200:
-                                            predictions = batch_response.json()
-                                            
-                                            # Add predictions to DataFrame
-                                            df['prediction'] = predictions.get('predictions', [])
-                                            if 'probabilities' in predictions:
-                                                df['confidence'] = predictions['probabilities']
-                                            
-                                            st.success("✅ Batch predictions completed!")
-                                            st.dataframe(df, use_container_width=True)
-                                            
-                                            # Download option
-                                            csv = df.to_csv(index=False)
-                                            st.download_button(
-                                                label="📥 Download Results as CSV",
-                                                data=csv,
-                                                file_name=f"{selected_model}_predictions.csv",
-                                                mime="text/csv"
-                                            )
-                                        else:
-                                            st.error(f"❌ Batch prediction failed: {batch_response.text}")
-                                            
-                                    except Exception as e:
-                                        st.error(f"❌ Error: {e}")
-            else:
-                st.info("📭 No trained models available. Train some models first in the Training section.")
-                
+                                        st.error(f"Prediction failed for `{model_name}`: {prediction_response.text}")
+                        except Exception as e:
+                            st.error(f"Prediction error: {e}")
         else:
-            st.error(f"❌ Failed to get models: {response.text}")
-            
+            st.error("❌ Failed to get uploaded files or models from backend.")
     except Exception as e:
         st.error(f"❌ Error connecting to backend: {e}")
     

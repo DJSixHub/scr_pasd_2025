@@ -32,6 +32,32 @@ class FileUploadResponse(BaseModel):
     preview: List[Dict[str, Any]] = None
 
 def create_app(model_names):
+    @app.get("/dataset_preview")
+    async def dataset_preview(dataset: str, n: int = 5):
+        """Return a preview/sample of the dataset by name, loading from persistent storage if needed."""
+        from src.data.data_loader import get_data_manager, load_dataset
+        import os
+        data_manager = get_data_manager()
+        preview = data_manager.get_file_sample(dataset, n=n)
+        if preview is not None:
+            return {"dataset": dataset, "preview": preview}
+        # Try to load from persistent storage (e.g., datasets/ folder)
+        datasets_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "datasets")
+        dataset_path = os.path.join(datasets_dir, dataset)
+        if os.path.exists(dataset_path):
+            df = load_dataset(dataset_path)
+            if df is not None:
+                # Register in object store for future use
+                data_manager.store_file_data(dataset, df.to_dict('records'))
+                preview = data_manager.get_file_sample(dataset, n=n)
+                if preview is not None:
+                    return {"dataset": dataset, "preview": preview}
+                else:
+                    return {"dataset": dataset, "preview": [], "error": "Failed to get preview after loading."}
+            else:
+                return {"dataset": dataset, "preview": [], "error": "Failed to load dataset from disk."}
+        else:
+            return {"dataset": dataset, "preview": [], "error": "Dataset not found in object store or persistent storage."}
     """
     Create FastAPI app for model serving - Cleaned version with only necessary endpoints
     """
@@ -95,21 +121,28 @@ def create_app(model_names):
         """Get ROC curve as a viewable PNG image"""
         try:
             actor = ray.get_actor(model_name)
+            # Check if model is classification by inspecting metrics or actor info
+            try:
+                metrics = ray.get(actor.get_metrics.remote(), timeout=2.0)
+                # If accuracy is not present, it's likely regression
+                if 'accuracy' not in metrics:
+                    raise HTTPException(status_code=404, detail=f"ROC curve not available for regression models.")
+            except Exception:
+                # If metrics can't be fetched, fallback to trying ROC
+                pass
             roc_png_data = ray.get(actor.generate_roc_png.remote())
-            
             if 'error' in roc_png_data:
-                raise HTTPException(status_code=500, detail=roc_png_data['error'])
-            
-            # Decode base64 to binary PNG data
+                raise HTTPException(status_code=404, detail=roc_png_data['error'])
             png_bytes = base64.b64decode(roc_png_data['roc_curve_png'])
-            
             return StreamingResponse(
                 io.BytesIO(png_bytes),
                 media_type="image/png",
                 headers={"Content-Disposition": f"inline; filename={model_name}_roc_curve.png"}
             )
+        except HTTPException:
+            raise
         except Exception as e:
-            raise HTTPException(status_code=404, detail=f"Model {model_name} not found: {str(e)}")
+            raise HTTPException(status_code=404, detail=f"Model {model_name} not found or ROC not available: {str(e)}")
 
     @app.get("/visualization/{model_name}/learning_curve")
     async def get_learning_curve(model_name: str):
