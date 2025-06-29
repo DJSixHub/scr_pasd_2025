@@ -121,47 +121,118 @@ def preprocess_dataset(df, target_col=None, test_size=0.2, random_state=42, scal
         return None
 
 
-@ray.remote
-class DataLoaderActor:
+class ObjectStoreDataManager:
     """
-    Ray actor for distributed data loading and storage
+    Pure object store data manager without actors
     """
     
     def __init__(self):
-        self.data = None
-        self.metadata = {}
-        logger.info("DataLoaderActor initialized")
+        # In-memory registry of uploaded files
+        self.file_registry = {}  # filename -> {data_ref, metadata}
+        logger.info("ObjectStoreDataManager initialized")
     
-    def load_data(self, records):
-        """Load data from records (list of dicts)"""
+    def store_file_data(self, filename, records):
+        """Store file data in Ray object store and register it"""
         try:
             import pandas as pd
-            self.data = pd.DataFrame(records)
-            self.metadata = {
-                'rows': len(self.data),
-                'columns': list(self.data.columns),
-                'loaded_at': pd.Timestamp.now().isoformat()
+            
+            # Create DataFrame from records
+            df = pd.DataFrame(records)
+            
+            # Store DataFrame in Ray's object store
+            data_ref = ray.put(df)
+            
+            # Store metadata and object reference
+            metadata = {
+                'rows': len(df),
+                'columns': list(df.columns),
+                'loaded_at': pd.Timestamp.now().isoformat(),
+                'data_ref': data_ref
             }
-            logger.info(f"Data loaded: {self.metadata['rows']} rows, {len(self.metadata['columns'])} columns")
+            
+            # Register the file
+            self.file_registry[filename] = metadata
+            
+            logger.info(f"File {filename} stored in object store: {metadata['rows']} rows, {len(metadata['columns'])} columns")
             return True
         except Exception as e:
-            logger.error(f"Error loading data: {e}")
+            logger.error(f"Error storing file {filename} in object store: {e}")
             return False
     
-    def get_data(self):
-        """Get the stored data"""
-        return self.data.to_dict('records') if self.data is not None else None
+    def get_file_data(self, filename):
+        """Get the stored data for a file from Ray object store"""
+        try:
+            if filename not in self.file_registry:
+                return None
+            
+            data_ref = self.file_registry[filename]['data_ref']
+            df = ray.get(data_ref)
+            return df.to_dict('records')
+        except Exception as e:
+            logger.error(f"Error retrieving data for {filename} from object store: {e}")
+            return None
     
-    def get_data_info(self):
-        """Get metadata about the stored data"""
-        return self.metadata
-    
-    def get_columns(self):
-        """Get column names"""
-        return list(self.data.columns) if self.data is not None else []
-    
-    def get_sample(self, n=5):
-        """Get a sample of the data"""
-        if self.data is not None:
-            return self.data.head(n).to_dict('records')
+    def get_file_info(self, filename):
+        """Get metadata about a stored file"""
+        if filename in self.file_registry:
+            # Return metadata without the data_ref (for JSON serialization)
+            info = self.file_registry[filename].copy()
+            info.pop('data_ref', None)
+            return info
         return None
+    
+    def get_file_columns(self, filename):
+        """Get column names for a file"""
+        info = self.get_file_info(filename)
+        return info.get('columns', []) if info else []
+    
+    def get_file_sample(self, filename, n=5):
+        """Get a sample of the data for a file"""
+        try:
+            if filename not in self.file_registry:
+                return None
+            
+            data_ref = self.file_registry[filename]['data_ref']
+            df = ray.get(data_ref)
+            return df.head(n).to_dict('records')
+        except Exception as e:
+            logger.error(f"Error retrieving sample for {filename} from object store: {e}")
+            return None
+    
+    def list_files(self):
+        """List all stored files"""
+        return list(self.file_registry.keys())
+    
+    def remove_file(self, filename):
+        """Remove a file from the registry and object store"""
+        try:
+            if filename in self.file_registry:
+                # Remove from registry (Ray will GC the object automatically)
+                del self.file_registry[filename]
+                logger.info(f"File {filename} removed from object store")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error removing file {filename}: {e}")
+            return False
+    
+    def clear_all(self):
+        """Clear all stored files"""
+        try:
+            self.file_registry.clear()
+            logger.info("All files cleared from object store")
+            return True
+        except Exception as e:
+            logger.error(f"Error clearing all files: {e}")
+            return False
+
+
+# Global instance to be used by the API
+_data_manager = None
+
+def get_data_manager():
+    """Get the global data manager instance"""
+    global _data_manager
+    if _data_manager is None:
+        _data_manager = ObjectStoreDataManager()
+    return _data_manager
