@@ -359,20 +359,18 @@ if section == "Training":
     
     if successfully_uploaded_files:
         st.subheader("2. ⚙️ Configure Training Parameters")
-        
-        # Display uploaded files and configure each one
         for filename, file_info in successfully_uploaded_files.items():
             st.markdown(f"#### 📄 Configure {filename}")
             st.caption(f"{file_info['rows']} rows, {len(file_info['columns'])} columns")
-            
+
             # Show file preview
             if file_info.get('preview'):
                 with st.expander("👁️ View Data Preview"):
                     preview_df = pd.DataFrame(file_info['preview'])
                     st.dataframe(preview_df, use_container_width=True)
-            
+
             col1, col2 = st.columns(2)
-            
+
             with col1:
                 # Smart task type detection based on filename
                 default_task_type = "classification"
@@ -380,7 +378,6 @@ if section == "Training":
                     default_task_type = "regression"
                 elif "classification" in filename.lower() or "cancer" in filename.lower():
                     default_task_type = "classification"
-                
                 # Task type selection with smart default
                 default_index = 0 if default_task_type == "classification" else 1
                 task_type = st.selectbox(
@@ -390,7 +387,7 @@ if section == "Training":
                     key=f"task_{filename}",
                     help=f"Recommended: {default_task_type} (based on filename analysis)"
                 )
-            
+
             with col2:
                 # Smart target column detection
                 default_target = "target"
@@ -402,13 +399,11 @@ if section == "Training":
                     default_target = next(col for col in file_info['columns'] if col.lower() == "value")
                 elif any("y" == col.lower() for col in file_info['columns']):
                     default_target = next(col for col in file_info['columns'] if col.lower() == "y")
-                
                 # Target column selection with smart default
                 try:
                     default_index = file_info['columns'].index(default_target)
                 except ValueError:
                     default_index = 0
-                    
                 target_column = st.selectbox(
                     "Target Column",
                     file_info['columns'],
@@ -416,13 +411,12 @@ if section == "Training":
                     key=f"target_{filename}",
                     help=f"The column to predict. Usually named 'target', 'price', 'value', or 'y'"
                 )
-            
+
             # Algorithm selection - Multiple selection
             if task_type == "classification":
                 algorithms = ["Random Forest", "Gradient Boosting", "SVM", "Logistic Regression", "K-Nearest Neighbors"]
             else:
                 algorithms = ["Random Forest Regressor", "Gradient Boosting Regressor", "Linear Regression", "Ridge Regression", "Lasso Regression", "Elastic Net"]
-            
             selected_algorithms = st.multiselect(
                 "Select Models to Train (you can select multiple)",
                 algorithms,
@@ -430,11 +424,10 @@ if section == "Training":
                 key=f"algos_{filename}",
                 help="You can select multiple models to train and compare their performance"
             )
-            
+
             # Advanced parameters section (not nested in expander)
             st.markdown("**⚙️ Advanced Parameters:**")
             col1, col2, col3 = st.columns(3)
-            
             with col1:
                 test_size = st.slider("Test Size", 0.1, 0.5, 0.2, key=f"test_size_{filename}")
             with col2:
@@ -448,13 +441,11 @@ if section == "Training":
                 'test_size': test_size,
                 'random_state': random_state
             }
-            
             # Show current configuration status
             if selected_algorithms:
                 st.success(f"✅ {len(selected_algorithms)} model(s) configured for {filename}")
             else:
                 st.warning("⚠️ Please select at least one algorithm")
-            
             st.markdown("---")  # Separator between datasets
         
         # Add single "Train All" button at the end
@@ -722,6 +713,7 @@ if section == "Predicción":
                 selected_dataset = st.selectbox("Select a dataset:", available_datasets)
                 dataset_key = selected_dataset.replace('.csv','').replace('.json','')
                 # --- Robust preview: fetch from backend preview endpoint ---
+
                 preview_data = None
                 preview_columns = None
                 preview_error = None
@@ -730,19 +722,19 @@ if section == "Predicción":
                     if preview_resp.status_code == 200:
                         preview_json = preview_resp.json()
                         preview_data = preview_json.get('preview', [])
-                        # Try to infer columns from preview or uploaded_files
                         if preview_data:
                             preview_columns = list(preview_data[0].keys())
-                        else:
-                            # fallback: get columns from uploaded_files
-                            dataset_info = next((f for f in files_data.get('uploaded_files', []) if f['filename'] == selected_dataset), None)
-                            if dataset_info:
-                                preview_columns = dataset_info.get('columns', [])
                         preview_error = preview_json.get('error')
                     else:
                         preview_error = f"Backend error: {preview_resp.text}"
                 except Exception as e:
                     preview_error = f"Preview fetch error: {e}"
+
+                # Always try to get columns from uploaded_files if not set
+                if not preview_columns:
+                    dataset_info = next((f for f in files_data.get('uploaded_files', []) if f['filename'] == selected_dataset), None)
+                    if dataset_info:
+                        preview_columns = dataset_info.get('columns', [])
 
                 st.write(f"**Preview for {selected_dataset}:**")
                 if preview_data and preview_columns:

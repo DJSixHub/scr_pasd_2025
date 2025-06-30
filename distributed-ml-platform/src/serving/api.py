@@ -32,6 +32,17 @@ class FileUploadResponse(BaseModel):
     preview: List[Dict[str, Any]] = None
 
 def create_app(model_names):
+    app = FastAPI(title="Distributed ML Platform API", description="Cleaned API for distributed machine learning")
+
+    # Add CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     @app.get("/dataset_preview")
     async def dataset_preview(dataset: str, n: int = 5):
         """Return a preview/sample of the dataset by name, loading from persistent storage if needed."""
@@ -41,13 +52,23 @@ def create_app(model_names):
         preview = data_manager.get_file_sample(dataset, n=n)
         if preview is not None:
             return {"dataset": dataset, "preview": preview}
-        # Try to load from persistent storage (e.g., datasets/ folder)
-        datasets_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "datasets")
-        dataset_path = os.path.join(datasets_dir, dataset)
-        if os.path.exists(dataset_path):
-            df = load_dataset(dataset_path)
+
+        # Try to load from persistent storage (search all likely locations)
+        search_dirs = [
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "datasets"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "datasets"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "datasets"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "..", "datasets")
+        ]
+        found_path = None
+        for d in search_dirs:
+            candidate = os.path.join(d, dataset)
+            if os.path.exists(candidate):
+                found_path = candidate
+                break
+        if found_path:
+            df = load_dataset(found_path)
             if df is not None:
-                # Register in object store for future use
                 data_manager.store_file_data(dataset, df.to_dict('records'))
                 preview = data_manager.get_file_sample(dataset, n=n)
                 if preview is not None:
@@ -56,26 +77,12 @@ def create_app(model_names):
                     return {"dataset": dataset, "preview": [], "error": "Failed to get preview after loading."}
             else:
                 return {"dataset": dataset, "preview": [], "error": "Failed to load dataset from disk."}
-        else:
-            return {"dataset": dataset, "preview": [], "error": "Dataset not found in object store or persistent storage."}
-    """
-    Create FastAPI app for model serving - Cleaned version with only necessary endpoints
-    """
-    app = FastAPI(title="Distributed ML Platform API", description="Cleaned API for distributed machine learning")
-    
-    # Add CORS middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    
+        return {"dataset": dataset, "preview": [], "error": "Dataset not found in object store or persistent storage."}
+
     @app.get("/")
     async def root():
         return {"message": "Distributed ML Platform API", "models_available": len(model_names)}
-    
+
     @app.get("/health")
     async def health():
         return {"status": "healthy", "models_loaded": len(model_names)}
