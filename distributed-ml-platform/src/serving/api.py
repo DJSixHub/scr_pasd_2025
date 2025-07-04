@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import time
+import asyncio
 from typing import Dict, List, Any
 
 import pandas as pd
@@ -33,6 +34,9 @@ class FileUploadResponse(BaseModel):
 
 def create_app(model_names):
     app = FastAPI(title="Distributed ML Platform API", description="Cleaned API for distributed machine learning")
+    
+    # Semaphore to limit concurrent upload operations
+    upload_semaphore = asyncio.Semaphore(2)  # Allow max 2 concurrent uploads
 
     # Add CORS middleware
     app.add_middleware(
@@ -86,6 +90,54 @@ def create_app(model_names):
     @app.get("/health")
     async def health():
         return {"status": "healthy", "models_loaded": len(model_names)}
+
+    @app.post("/clear_memory")
+    async def clear_distributed_memory():
+        """Clear all distributed memory including trained models and datasets"""
+        try:
+            logger.info("Starting distributed memory cleanup...")
+            
+            # Clear all named actors (trained models)
+            all_actors = ray.util.list_named_actors()
+            cleared_actors = 0
+            
+            for actor_name in all_actors:
+                try:
+                    actor = ray.get_actor(actor_name)
+                    ray.kill(actor)
+                    cleared_actors += 1
+                    logger.info(f"Cleared actor: {actor_name}")
+                except Exception as e:
+                    logger.warning(f"Could not clear actor {actor_name}: {e}")
+            
+            # Clear object store data
+            from src.data.data_loader import get_data_manager
+            data_manager = get_data_manager()
+            
+            try:
+                # Clear all stored datasets
+                files_cleared = data_manager.clear_all_data()
+                logger.info(f"Cleared {files_cleared} datasets from object store")
+            except Exception as e:
+                logger.warning(f"Could not clear object store: {e}")
+                files_cleared = 0
+            
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+            logger.info(f"Memory cleanup completed. Cleared {cleared_actors} actors and {cleared_actors} datasets")
+            
+            return {
+                "status": "success",
+                "actors_cleared": cleared_actors,
+                "datasets_cleared": files_cleared,
+                "message": "Distributed memory cleared successfully"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error clearing distributed memory: {e}")
+            raise HTTPException(status_code=500, detail=f"Error clearing memory: {str(e)}")
 
     # Models endpoints
     @app.get("/models")
@@ -217,72 +269,73 @@ def create_app(model_names):
     @app.post("/upload", response_model=FileUploadResponse)
     async def upload_file(request: FileUploadRequest):
         """Upload and process a file in a distributed manner"""
-        try:
-            logger.info(f"Upload request received for file: {request.filename}")
-            
-            # Validate request
-            if not request.filename or not request.content:
-                raise HTTPException(status_code=400, detail="Filename and content are required")
-            
-            # Decode base64 content
+        async with upload_semaphore:
             try:
-                content_bytes = base64.b64decode(request.content)
-                logger.info(f"Successfully decoded base64 content for {request.filename} ({len(content_bytes)} bytes)")
-            except Exception as e:
-                logger.error(f"Failed to decode base64 content: {e}")
-                raise HTTPException(status_code=400, detail=f"Invalid base64 content: {str(e)}")
-            
-            # Determine file type and read accordingly
-            filename_lower = request.filename.lower()
-            if filename_lower.endswith('.csv'):
+                logger.info(f"Upload request received for file: {request.filename}")
+                
+                # Validate request
+                if not request.filename or not request.content:
+                    raise HTTPException(status_code=400, detail="Filename and content are required")
+                
+                # Decode base64 content
                 try:
-                    df = pd.read_csv(io.StringIO(content_bytes.decode('utf-8')))
-                    logger.info(f"Successfully parsed CSV file with {len(df)} rows and {len(df.columns)} columns")
+                    content_bytes = base64.b64decode(request.content)
+                    logger.info(f"Successfully decoded base64 content for {request.filename} ({len(content_bytes)} bytes)")
                 except Exception as e:
-                    logger.error(f"Failed to parse CSV: {e}")
-                    raise HTTPException(status_code=400, detail=f"Invalid CSV format: {str(e)}")
-            elif filename_lower.endswith('.json'):
+                    logger.error(f"Failed to decode base64 content: {e}")
+                    raise HTTPException(status_code=400, detail=f"Invalid base64 content: {str(e)}")
+                
+                # Determine file type and read accordingly
+                filename_lower = request.filename.lower()
+                if filename_lower.endswith('.csv'):
+                    try:
+                        df = pd.read_csv(io.StringIO(content_bytes.decode('utf-8')))
+                        logger.info(f"Successfully parsed CSV file with {len(df)} rows and {len(df.columns)} columns")
+                    except Exception as e:
+                        logger.error(f"Failed to parse CSV: {e}")
+                        raise HTTPException(status_code=400, detail=f"Invalid CSV format: {str(e)}")
+                elif filename_lower.endswith('.json'):
+                    try:
+                        df = pd.read_json(io.StringIO(content_bytes.decode('utf-8')))
+                        logger.info(f"Successfully parsed JSON file with {len(df)} rows and {len(df.columns)} columns")
+                    except Exception as e:
+                        logger.error(f"Failed to parse JSON: {e}")
+                        raise HTTPException(status_code=400, detail=f"Invalid JSON format: {str(e)}")
+                else:
+                    raise HTTPException(status_code=400, detail=f"Unsupported file type: {request.filename}. Only CSV and JSON files are supported.")
+                
+                # Store data using object store
+                from src.data.data_loader import get_data_manager
+                data_manager = get_data_manager()
+                
                 try:
-                    df = pd.read_json(io.StringIO(content_bytes.decode('utf-8')))
-                    logger.info(f"Successfully parsed JSON file with {len(df)} rows and {len(df.columns)} columns")
+                    success = data_manager.store_file_data(request.filename, df.to_dict('records'))
+                    if not success:
+                        raise HTTPException(status_code=500, detail="Failed to store data in object store")
+                    logger.info(f"Data stored in object store: {len(df)} records for {request.filename}")
                 except Exception as e:
-                    logger.error(f"Failed to parse JSON: {e}")
-                    raise HTTPException(status_code=400, detail=f"Invalid JSON format: {str(e)}")
-            else:
-                raise HTTPException(status_code=400, detail=f"Unsupported file type: {request.filename}. Only CSV and JSON files are supported.")
-            
-            # Store data using object store
-            from src.data.data_loader import get_data_manager
-            data_manager = get_data_manager()
-            
-            try:
-                success = data_manager.store_file_data(request.filename, df.to_dict('records'))
-                if not success:
-                    raise HTTPException(status_code=500, detail="Failed to store data in object store")
-                logger.info(f"Data stored in object store: {len(df)} records for {request.filename}")
+                    logger.error(f"Failed to store data in object store: {e}")
+                    raise HTTPException(status_code=500, detail=f"Failed to distribute data: {str(e)}")
+                
+                # Generate preview
+                preview = df.head(5).to_dict('records')
+                
+                response = FileUploadResponse(
+                    filename=request.filename,
+                    status="uploaded_and_distributed",
+                    rows=len(df),
+                    columns=list(df.columns),
+                    preview=preview
+                )
+                
+                logger.info(f"Successfully processed file {request.filename}")
+                return response
+                
+            except HTTPException:
+                raise
             except Exception as e:
-                logger.error(f"Failed to store data in object store: {e}")
-                raise HTTPException(status_code=500, detail=f"Failed to distribute data: {str(e)}")
-            
-            # Generate preview
-            preview = df.head(5).to_dict('records')
-            
-            response = FileUploadResponse(
-                filename=request.filename,
-                status="uploaded_and_distributed",
-                rows=len(df),
-                columns=list(df.columns),
-                preview=preview
-            )
-            
-            logger.info(f"Successfully processed file {request.filename}")
-            return response
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error uploading file {request.filename}: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+                logger.error(f"Unexpected error uploading file {request.filename}: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
     
     @app.get("/uploaded_files")
     async def list_uploaded_files():
@@ -389,26 +442,35 @@ def create_app(model_names):
 
     @app.get("/cluster/workers")
     async def get_workers():
-        """Get worker information"""
+        """Get worker information from Ray cluster"""
         try:
-            # Mock worker details for Docker environment
-            worker_details = [
-                {
-                    "number": 1,
-                    "name": "ray_worker_1",
-                    "status": "running"
-                },
-                {
-                    "number": 2, 
-                    "name": "ray_worker_2",
-                    "status": "running"
-                }
-            ]
+            # Get actual Ray cluster state
+            nodes = ray.nodes()
+            alive_nodes = [n for n in nodes if n.get("Alive", False)]
+            
+            # Head node is typically the first one or has specific characteristics
+            head_node = alive_nodes[0] if alive_nodes else None
+            worker_nodes = alive_nodes[1:] if len(alive_nodes) > 1 else []
+            
+            worker_details = []
+            for i, worker_node in enumerate(worker_nodes):
+                node_resources = worker_node.get("Resources", {})
+                worker_details.append({
+                    "number": i + 1,
+                    "name": f"ray_worker_{i + 1}",
+                    "status": "running",
+                    "node_id": worker_node.get("NodeID", "unknown"),
+                    "resources": {
+                        "CPU": node_resources.get("CPU", 0),
+                        "memory": node_resources.get("memory", 0)
+                    }
+                })
             
             return {
                 "success": True,
                 "workers": worker_details,
-                "total_workers": len(worker_details)
+                "total_workers": len(worker_details),
+                "total_nodes": len(alive_nodes)
             }
         except Exception as e:
             logger.error(f"Error getting worker details: {e}")
@@ -509,24 +571,26 @@ def create_app(model_names):
                     
                     # Define available models based on task type
                     if is_classification:
-                        from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+                        from sklearn.ensemble import GradientBoostingClassifier
                         from sklearn.linear_model import LogisticRegression
                         from sklearn.svm import SVC
                         from sklearn.neighbors import KNeighborsClassifier
+                        from sklearn.tree import DecisionTreeClassifier
                         
                         model_mapping = {
-                            "random_forest": RandomForestClassifier(n_estimators=100, random_state=random_state),
+                            "decision_tree": DecisionTreeClassifier(random_state=random_state),
                             "gradient_boosting": GradientBoostingClassifier(random_state=random_state),
                             "logistic_regression": LogisticRegression(max_iter=1000, random_state=random_state),
                             "svm": SVC(probability=True, random_state=random_state),
                             "k_nearest_neighbors": KNeighborsClassifier(n_neighbors=5)
                         }
                     else:
-                        from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+                        from sklearn.ensemble import GradientBoostingRegressor
                         from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
+                        from sklearn.tree import DecisionTreeRegressor
                         
                         model_mapping = {
-                            "random_forest_regressor": RandomForestRegressor(n_estimators=100, random_state=random_state),
+                            "decision_tree_regressor": DecisionTreeRegressor(random_state=random_state),
                             "gradient_boosting_regressor": GradientBoostingRegressor(random_state=random_state),
                             "linear_regression": LinearRegression(),
                             "ridge_regression": Ridge(random_state=random_state),
@@ -601,5 +665,7 @@ def create_app(model_names):
         except Exception as e:
             logger.error(f"Batch training error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-
+    
     return app, None
+
+

@@ -8,14 +8,58 @@ import time
 
 st.set_page_config(page_title="Distributed ML Platform Interface", layout="wide")
 
+# --- Robust session state initialization ---
+def ensure_session_state():
+    """Initialize all session state variables to prevent KeyError crashes"""
+    defaults = {
+        'cluster': {'head': {'cpu': 2, 'ram': 4, 'running': False}},
+        'uploaded_files': {},
+        'file_configs': {},
+        'last_training_results': None,
+        'last_worker_count': None,
+        'sidebar_section': 'Cluster'  # Default section
+    }
+    for key, default_value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
+
+# Initialize session state to prevent crashes
+ensure_session_state()
+
 # --- CLUSTER MANAGEMENT ---
 st.sidebar.title("Menú principal")
-section = st.sidebar.radio("Selecciona una sección", ["Cluster", "Training", "Predicción"])
 
-if 'cluster' not in st.session_state:
-    st.session_state['cluster'] = {
-        'head': {'cpu': 2, 'ram': 4, 'running': False},
-    }
+# Ultra-safe radio widget to prevent crashes during scaling
+section = 'Cluster'  # Default fallback
+try:
+    # Try to get current section safely
+    current_index = 0
+    if 'sidebar_section' in st.session_state:
+        try:
+            current_index = ["Cluster", "Training", "Predicción"].index(st.session_state['sidebar_section'])
+        except (ValueError, KeyError):
+            current_index = 0
+    
+    # Create radio widget with stable key
+    section = st.sidebar.radio(
+        "Selecciona una sección", 
+        ["Cluster", "Training", "Predicción"],
+        index=current_index,
+        key="main_section_radio"  # Stable key for consistent behavior
+    )
+    st.session_state['sidebar_section'] = section
+except Exception as e:
+    st.sidebar.warning("🔄 Menú en modo recuperación")
+    # Use selectbox as fallback
+    try:
+        section = st.sidebar.selectbox(
+            "Selecciona una sección", 
+            ["Cluster", "Training", "Predicción"],
+            index=0,
+            key="fallback_section_selector"
+        )
+    except:
+        section = 'Cluster'  # Ultimate fallback
 
 def check_backend_connectivity():
     """Check if backend is accessible and return status info"""
@@ -32,6 +76,16 @@ def check_backend_connectivity():
     except Exception as e:
         return {"status": "error", "message": f"Connection error: {str(e)}"}
 
+def get_workers_from_api():
+    """Get workers information directly from API"""
+    try:
+        response = requests.get('http://localhost:8000/cluster/workers', timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        return {"error": "API not available", "success": False}
+    except Exception as e:
+        return {"error": str(e), "success": False}
+
 def get_cluster_status():
     """Get cluster status from backend API"""
     try:
@@ -47,23 +101,52 @@ def get_cluster_status():
 if section == "Cluster":
     st.header("Gestión del Clúster Ray Distribuido")
     
+    # Add refresh button for cluster state
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.write("")  # Empty space
+    with col2:
+        if st.button("🔄 Refrescar workers", help="Consulta la API para obtener el estado actual de todos los workers"):
+            # Force refresh by clearing any cached data and re-querying API
+            st.cache_data.clear()
+            workers_info = get_workers_from_api()
+            if workers_info.get("success"):
+                st.success(f"✅ Detectados {workers_info.get('total_workers', 0)} workers activos")
+            else:
+                st.error(f"❌ Error consultando workers: {workers_info.get('error', 'Unknown error')}")
+            st.rerun()
+    
     # Get real cluster status from backend
     cluster_status = get_cluster_status()
+    
+    # Detect changes in worker count
+    if "error" not in cluster_status:
+        nodes = cluster_status.get("node_details", [])
+        current_worker_count = max(0, len(nodes) - 1) if nodes else 0
+        
+        # Removed info/warning messages for worker count changes
+        
+        st.session_state['last_worker_count'] = current_worker_count
     
     if "error" not in cluster_status:
         st.subheader("Estado Actual del Clúster")
         
-        # Get worker details from backend
-        try:
-            workers_response = requests.get('http://localhost:8000/cluster/workers', timeout=15)
-            worker_details = []
-            if workers_response.status_code == 200:
-                worker_data = workers_response.json()
-                if worker_data.get('success'):
-                    worker_details = worker_data.get('workers', [])
-        except Exception as e:
-            worker_details = []
-            st.warning(f"Could not fetch worker details (timeout or error): {e}")
+        # Get worker details from backend API
+        workers_api_response = get_workers_from_api()
+        worker_details = []
+        if workers_api_response.get("success"):
+            worker_details = workers_api_response.get("workers", [])
+        
+        # Also try the original endpoint as fallback
+        if not worker_details:
+            try:
+                workers_response = requests.get('http://localhost:8000/cluster/workers', timeout=15)
+                if workers_response.status_code == 200:
+                    worker_data = workers_response.json()
+                    if worker_data.get('success'):
+                        worker_details = worker_data.get('workers', [])
+            except Exception as e:
+                st.warning(f"Could not fetch worker details (timeout or error): {e}")
         
         # Create comprehensive cluster table
         st.markdown("### 📋 Nodos del Clúster")
@@ -92,78 +175,52 @@ if section == "Cluster":
             "Tipo": "Coordinador Principal"
         })
         
-        # Add worker nodes
-        for worker in worker_details:
-            status_icon = "🟢" if worker.get('status') == 'running' else "⏸️" if worker.get('status') == 'exited' else "🔴"
-            status_text = {
-                'running': 'Activo',
-                'exited': 'Pausado', 
-                'created': 'Creado',
-                'restarting': 'Reiniciando'
-            }.get(worker.get('status'), 'Desconocido')
-            
-            # Extract CPU count from Ray cluster info with realistic capping
-            worker_cpu_raw = 2.0  # Default for Docker containers
-            worker_memory = 2.0  # Default for Docker containers
-            
-            # Try to get more accurate resource info from Ray
-            for node in nodes[1:]:  # Skip head node
-                if node.get("Alive"):
-                    worker_cpu_raw = node.get("Resources", {}).get("CPU", 2.0)
-                    worker_memory = node.get("Resources", {}).get("memory", 2e9) / 1e9
-                    break
-            
-            # Cap worker CPU at realistic values
-            worker_cpu = min(worker_cpu_raw, 4)  # Cap worker CPUs at 4 cores
-            
-            table_data.append({
-                "Nodo": f"⚙️ Worker {worker['number']} ({worker['name']})",
-                "CPU": f"{worker_cpu}",
-                "RAM (GB)": f"{worker_memory:.1f}",
-                "Estado": f"{status_icon} {status_text}",
-                "Tipo": "Nodo de Procesamiento"
-            })
+        # Add worker nodes - use same logic as metrics (all Ray nodes except head)
+        worker_nodes = nodes[1:] if len(nodes) > 1 else []  # All nodes except head
         
-        # Display table
+        # Build worker table using API data
+        if worker_details:
+            for worker in worker_details:
+                # Get CPU and memory from worker resources
+                worker_cpu = 4  # Default
+                worker_memory = 2.0  # Default
+                
+                if 'resources' in worker:
+                    worker_cpu = min(worker['resources'].get('CPU', 4), 4)
+                    worker_memory = worker['resources'].get('memory', 2e9) / 1e9
+                
+                status_icon = "🟢"
+                status_text = "Activo"
+                
+                table_data.append({
+                    "Nodo": f"⚙️ Worker {worker['number']} ({worker['name']})",
+                    "CPU": f"{worker_cpu}",
+                    "RAM (GB)": f"{worker_memory:.1f}",
+                    "Estado": f"{status_icon} {status_text}",
+                    "Tipo": "Nodo de Procesamiento"
+                })
+        else:
+            # Fallback: use Ray cluster info if API data not available
+            for i, worker_node in enumerate(worker_nodes):
+                if worker_node.get("Alive"):
+                    worker_cpu_raw = worker_node.get("Resources", {}).get("CPU", 2.0)
+                    worker_memory = worker_node.get("Resources", {}).get("memory", 2e9) / 1e9
+                    worker_cpu = min(worker_cpu_raw, 4)
+                    
+                    table_data.append({
+                        "Nodo": f"⚙️ Worker {i+1} (ray-worker-{i+1})",
+                        "CPU": f"{worker_cpu}",
+                        "RAM (GB)": f"{worker_memory:.1f}",
+                        "Estado": "🟢 Activo",
+                        "Tipo": "Nodo de Procesamiento"
+                    })
+        
+        # Display table with current worker count info
         if table_data:
             df = pd.DataFrame(table_data)
             st.dataframe(df, use_container_width=True, hide_index=True)
-        
-        st.markdown("---")
-        st.info("� Los nodos del clúster son gestionados automáticamente por Docker Compose. Para escalar el clúster, use los comandos de Docker desde la máquina host.")
-        
-        # Cluster summary metrics with realistic CPU values
-        st.markdown("---")
-        st.subheader("📊 Métricas del Clúster")
-        
-        # Calculate realistic CPU totals (capped values)
-        total_realistic_cpus = sum([min(node.get("Resources", {}).get("CPU", 2.0), 8) for node in nodes if node.get("Alive")])
-        available_realistic_cpus = min(cluster_status.get("available_resources", {}).get("CPU", 0), total_realistic_cpus)
-        
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Nodos Totales", cluster_status.get("nodes", 0))
-        with col2:
-            st.metric("CPUs Totales", int(total_realistic_cpus))
-        with col3:
-            st.metric("CPUs Disponibles", int(available_realistic_cpus))
-        with col4:
-            st.metric("Memoria Total (GB)", round(cluster_status.get("cluster_resources", {}).get("memory", 0) / 1e9, 2))
-        
-        # Resource utilization with realistic values
-        if "summary" in cluster_status and cluster_status["summary"]:
-            # Calculate realistic CPU utilization
-            cpu_util = 0
-            if total_realistic_cpus > 0:
-                cpu_util = (total_realistic_cpus - available_realistic_cpus) / total_realistic_cpus * 100
-            
-            memory_util = cluster_status["summary"].get("memory_utilization", 0)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Uso de CPU", f"{cpu_util:.1f}%")
-            with col2:
-                st.metric("Uso de Memoria", f"{memory_util:.1f}%")
+        else:
+            st.warning("No se pudo obtener información de los nodos del clúster")
         
         # Detailed cluster information
         with st.expander("🔍 Información Detallada del Clúster"):
@@ -236,17 +293,31 @@ if section == "Training":
                                 else:
                                     st.write(f"  - {model_name}: Training completed")
     
-    # Initialize session state
-    if 'uploaded_files' not in st.session_state:
-        st.session_state['uploaded_files'] = {}
-    if 'file_configs' not in st.session_state:
-        st.session_state['file_configs'] = {}
-    if 'last_training_results' not in st.session_state:
-        st.session_state['last_training_results'] = None
+    # Session state is already initialized at the top of the file
     
     # Step 1: File Upload
     st.subheader("1. 📁 Subir Archivos CSV/JSON")
-    
+
+    # Add distributed memory clear button
+    if st.button("🧹 Limpiar Memoria Distribuida", help="Limpia toda la memoria distribuida y los modelos entrenados para evitar desbordamientos y empezar de cero."):
+        with st.spinner("Limpiando memoria distribuida y recursos del clúster..."):
+            try:
+                response = requests.post("http://localhost:8000/clear_memory", timeout=60)
+                if response.status_code == 200:
+                    st.session_state['uploaded_files'] = {}
+                    st.session_state['file_configs'] = {}
+                    st.session_state['last_training_results'] = None
+                    st.success("✅ Memoria distribuida limpiada correctamente. Puedes subir nuevos archivos y entrenar modelos desde cero.")
+                    st.rerun()
+                else:
+                    try:
+                        error_msg = response.json().get('detail', response.text)
+                    except Exception:
+                        error_msg = response.text
+                    st.error(f"❌ Error al limpiar memoria distribuida: {error_msg}")
+            except Exception as e:
+                st.error(f"❌ Error de conexión al limpiar memoria distribuida: {e}")
+
     # File uploader for multiple files
     uploaded_files = st.file_uploader(
         "Seleccione archivos CSV o JSON para procesamiento distribuido:",
@@ -267,13 +338,27 @@ if section == "Training":
         # Auto-process files if not already processed
         files_to_process = [f for f in uploaded_files if f.name not in st.session_state['uploaded_files']]
         
+        # Debug info
+        if not files_to_process and uploaded_files:
+            st.warning("⚠️ Los archivos ya están en la sesión pero pueden no haberse procesado correctamente.")
+            if st.button("🔄 Forzar reprocesamiento de todos los archivos"):
+                # Clear session state for these files
+                for uploaded_file in uploaded_files:
+                    if uploaded_file.name in st.session_state['uploaded_files']:
+                        del st.session_state['uploaded_files'][uploaded_file.name]
+                st.rerun()
+        
         if files_to_process:
             # Process and upload files to backend automatically
-            st.info(f"� {len(files_to_process)} archivo(s) nuevo(s) detectado(s). Procesando automáticamente...")
+            st.info(f"🔄 {len(files_to_process)} archivo(s) nuevo(s) detectado(s). Procesando automáticamente...")
             uploaded_count = 0
             
-            for uploaded_file in files_to_process:
+            for i, uploaded_file in enumerate(files_to_process):
                 filename = uploaded_file.name
+                
+                # Add delay between requests to prevent API overload
+                if i > 0:
+                    time.sleep(0.5)
                 
                 try:
                     # Read file content
@@ -299,20 +384,64 @@ if section == "Training":
                         uploaded_count += 1
                         st.success(f"✅ {filename} procesado y distribuido ({upload_result.get('rows', 'N/A')} filas)")
                     else:
-                        error_msg = response.text
-                        st.error(f"❌ Error procesando {filename}: {error_msg}")
+                        # Get detailed error information
+                        try:
+                            error_details = response.json()
+                            error_msg = error_details.get('detail', response.text)
+                        except:
+                            error_msg = response.text
+                        
+                        st.error(f"❌ Error procesando {filename} (Código {response.status_code})")
+                        
+                        # Show specific error details
+                        if response.status_code == 400:
+                            st.error(f"🔍 Detalle del error: {error_msg}")
+                            st.info("💡 Posibles causas: archivo corrupto, formato incorrecto, o problema con la codificación")
+                        elif response.status_code == 403:
+                            st.error(f"🔍 Error de permisos (403): {error_msg}")
+                            st.info("💡 Posibles causas: problema de autenticación del backend, permisos de Ray, o configuración CORS")
+                            st.warning("🔧 Solución: Reinicie el backend con `docker-compose restart ray-head`")
+                        elif response.status_code == 500:
+                            st.error(f"🔍 Error interno del servidor: {error_msg}")
+                            st.info("💡 Posible causa: problema en el procesamiento del backend")
+                        else:
+                            st.error(f"🔍 Error: {error_msg}")
+                        
                         # Store failed upload info to prevent showing configuration
                         st.session_state['uploaded_files'][filename] = {"error": error_msg}
                         
                 except Exception as e:
-                    st.error(f"❌ Error procesando {filename}: {e}")
+                    st.error(f"❌ Error de conexión procesando {filename}: {e}")
+                    st.info("💡 Verifique que el backend esté ejecutándose correctamente")
                     # Store failed upload info to prevent showing configuration
                     st.session_state['uploaded_files'][filename] = {"error": str(e)}
             
             if uploaded_count > 0:
                 st.info(f"📤 {uploaded_count} archivo(s) distribuido(s) en el clúster Ray")
-                # Don't auto-rerun to prevent infinite loops
                 st.success("🔄 Página actualizada. Los archivos están listos para configuración.")
+            elif uploaded_count == 0 and files_to_process:
+                st.error("❌ Ningún archivo pudo ser procesado. Verifique los errores arriba.")
+                
+                # Add diagnostic information
+                with st.expander("🔧 Información de diagnóstico"):
+                    st.write("**Estado del backend:**")
+                    backend_status = check_backend_connectivity()
+                    if backend_status["status"] == "connected":
+                        st.success("✅ Backend accesible")
+                    else:
+                        st.error(f"❌ Problema con backend: {backend_status['message']}")
+                    
+                    st.write("**Archivos que fallaron:**")
+                    for file in files_to_process:
+                        file_size = len(file.getvalue()) / (1024 * 1024)
+                        st.write(f"- {file.name}: {file_size:.2f} MB")
+                        
+                    st.write("**Posibles soluciones:**")
+                    st.write("1. **Para errores 403**: Reinicie el backend: `docker-compose restart ray-head`")
+                    st.write("2. **Para errores 400**: Verifique que los archivos CSV tengan formato correcto")
+                    st.write("3. Asegúrese que los archivos no estén corruptos")
+                    st.write("4. Verifique que el backend esté funcionando: `docker-compose logs ray-head`")
+                    st.write("5. Si persiste, reconstruya: `docker-compose up --build -d`")
         else:
             # All files already processed
             st.success("✅ Todos los archivos ya han sido procesados y están listos para configuración")
@@ -353,7 +482,7 @@ if section == "Training":
                             st.info("💡 Por favor, vuelve a subir los archivos.")
                     elif missing_files:
                         # Some files missing but not all - show info message
-                        st.info(f"ℹ️ Algunos archivos ({missing_files}) no están disponibles en el backend. Esto es normal si acabas de subirlos.")
+                        st.info(f"ℹ️ Algunos archivos ({missing_files}) no están disponibles en el backend. Esto puede ocurrir si se han agregado/eliminado workers o si el clúster se ha reconfigurado. Si persisten los problemas, vuelve a subir los archivos.")
         except Exception:
             pass  # If backend check fails, continue with cached session state
     
@@ -414,9 +543,9 @@ if section == "Training":
 
             # Algorithm selection - Multiple selection
             if task_type == "classification":
-                algorithms = ["Random Forest", "Gradient Boosting", "SVM", "Logistic Regression", "K-Nearest Neighbors"]
+                algorithms = ["Decision Tree", "Gradient Boosting", "SVM", "Logistic Regression", "K-Nearest Neighbors"]
             else:
-                algorithms = ["Random Forest Regressor", "Gradient Boosting Regressor", "Linear Regression", "Ridge Regression", "Lasso Regression", "Elastic Net"]
+                algorithms = ["Decision Tree Regressor", "Gradient Boosting Regressor", "Linear Regression", "Ridge Regression", "Lasso Regression", "Elastic Net"]
             selected_algorithms = st.multiselect(
                 "Select Models to Train (you can select multiple)",
                 algorithms,
@@ -471,13 +600,13 @@ if section == "Training":
                             """Convert display name to API name"""
                             mapping = {
                                 # Classification algorithms
-                                "Random Forest": "random_forest",
+                                "Decision Tree": "decision_tree",
                                 "Gradient Boosting": "gradient_boosting", 
                                 "SVM": "svm",
                                 "Logistic Regression": "logistic_regression",
                                 "K-Nearest Neighbors": "k_nearest_neighbors",
                                 # Regression algorithms
-                                "Random Forest Regressor": "random_forest_regressor",
+                                "Decision Tree Regressor": "decision_tree_regressor",
                                 "Gradient Boosting Regressor": "gradient_boosting_regressor",
                                 "Linear Regression": "linear_regression",
                                 "Ridge Regression": "ridge_regression",
@@ -625,6 +754,14 @@ if section == "Training":
                             
                     except Exception as e:
                         st.error(f"❌ Error during batch training: {e}")
+                        
+                        # Additional error handling: check if cluster is healthy
+                        cluster_status = get_cluster_status()
+                        if "error" in cluster_status:
+                            st.error("🔴 El clúster Ray no está disponible. Verifica que los contenedores estén ejecutándose.")
+                            st.info("Para resolver el problema, ejecuta: `docker-compose restart`")
+                        else:
+                            st.info("El clúster está funcionando. El error puede ser temporal. Intenta nuevamente en unos momentos.")
         else:
             st.warning("⚠️ Please configure and select algorithms for at least one dataset before training")
     else:
@@ -751,17 +888,34 @@ if section == "Predicción":
                     st.warning("No models trained on this dataset.")
                 else:
                     selected_models = st.multiselect("Select model(s) to use for prediction:", models_for_dataset, default=models_for_dataset[:1])
-                    # Feature input UI (side-by-side)
+                    # Feature input UI (organized in max 3 columns)
                     st.markdown("**Enter feature values for prediction:**")
                     # Build list of features (skip target)
                     # Use preview_columns if available, else fallback to dataset_info columns
                     input_features = [col for col in (preview_columns if preview_columns else []) if col.lower() != 'target']
                     feature_inputs = {}
-                    # Use columns for side-by-side input fields
-                    cols = st.columns(len(input_features) if input_features else 1)
-                    for i, col in enumerate(input_features):
-                        with cols[i]:
-                            feature_inputs[col] = st.text_input(f"{col}", key=f"predict_{col}_{selected_dataset}")
+                    
+                    # Organize features in max 3 columns
+                    max_cols = 3
+                    num_features = len(input_features)
+                    if num_features > 0:
+                        # Calculate number of rows needed
+                        rows_needed = (num_features + max_cols - 1) // max_cols
+                        
+                        for row in range(rows_needed):
+                            # Create columns for this row
+                            cols_in_row = min(max_cols, num_features - row * max_cols)
+                            cols = st.columns(cols_in_row)
+                            
+                            for col_idx in range(cols_in_row):
+                                feature_idx = row * max_cols + col_idx
+                                if feature_idx < num_features:
+                                    feature_name = input_features[feature_idx]
+                                    with cols[col_idx]:
+                                        feature_inputs[feature_name] = st.text_input(
+                                            f"{feature_name}", 
+                                            key=f"predict_{feature_name}_{selected_dataset}"
+                                        )
                     if st.button("🔮 Predict", use_container_width=True):
                         # Prepare feature dict for prediction
                         try:
@@ -827,3 +981,7 @@ if section == "Predicción":
                     st.error(f"Backend error: {response.text}")
             except Exception as e:
                 st.error(f"Connection error: {e}")
+                
+        if st.button("Check Cluster Status"):
+            cluster_status = get_cluster_status()
+            st.json(cluster_status)
